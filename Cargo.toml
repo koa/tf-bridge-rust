@@ -1,0 +1,26 @@
+[package]
+name = "tf_bridge_rust"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+tinkerforge = { version = "2.0.20", registry = "kellnr-berg-turbenthal", path = "../generators/rust/zip", features = ["prometheus"] }
+tokio = "1.33.0"
+tokio-stream = "0.1.14"
+sub-array = "0.1.1"
+bitmap-font = "0.3.0"
+embedded-graphics = "0.8.1"
+prometheus = "0.13.3"
+serde = { version = "1.0.190", features = ["derive"] }
+config = "0.13.3"
+lazy_static = "1.4.0"
+actix-web = "4.4.0"
+actix-web-prometheus = { version = "0.1.2", features = ["process"] }
+env_logger = "0.10.0"
+log = "0.4"
+
+[build-dependencies]
+image = "0.24.7"
+anyhow = "1.0.75"
