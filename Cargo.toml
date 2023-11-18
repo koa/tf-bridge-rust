@@ -6,6 +6,7 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+chrono = "0.4.31"
 tinkerforge = { version = "2.0.20", registry = "kellnr-berg-turbenthal", path = "../generators/rust/zip", features = ["prometheus"] }
 tokio = "1.33.0"
 tokio-stream = "0.1.14"
@@ -20,6 +21,8 @@ actix-web = "4.4.0"
 actix-web-prometheus = { version = "0.1.2", features = ["process"] }
 env_logger = "0.10.0"
 log = "0.4"
+strum_macros = "0.25.3"
+strum = "0.25.0"
 
 [build-dependencies]
 image = "0.24.7"

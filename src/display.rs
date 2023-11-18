@@ -4,6 +4,8 @@ use embedded_graphics::{
     primitives::Rectangle,
     Pixel,
 };
+use strum::IntoEnumIterator;
+use strum_macros::EnumIter;
 use sub_array::SubArray;
 use tinkerforge::error::TinkerforgeError;
 use tinkerforge::ip_connection::async_io::AsyncIpConnection;
@@ -235,11 +237,17 @@ impl<const W: usize, const L: usize> DrawTarget for BooleanImage<W, L> {
     }
 }
 
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, EnumIter)]
 pub enum Orientation {
     Straight,
     LeftDown,
     UpsideDown,
+    RightDown,
+}
+#[derive(Copy, Clone, Debug, Eq, PartialEq, EnumIter)]
+pub enum OrientationFormat {
+    Portrait,
+    Landscape,
 }
 
 impl Orientation {
@@ -255,6 +263,10 @@ impl Orientation {
                 x: DISPLAY_WIDTH as i32 - p.x - 1,
                 y: DISPLAY_HEIGHT as i32 - p.y - 1,
             },
+            Orientation::RightDown => Point {
+                x: p.y,
+                y: DISPLAY_HEIGHT as i32 - p.x - 1,
+            },
         }
     }
     fn translate_reverse(&self, p: Point) -> Point {
@@ -268,18 +280,47 @@ impl Orientation {
                 x: DISPLAY_WIDTH as i32 - p.x - 1,
                 y: DISPLAY_HEIGHT as i32 - p.y - 1,
             },
+            Orientation::RightDown => Point {
+                x: DISPLAY_HEIGHT as i32 - p.y - 1,
+                y: p.x,
+            },
+        }
+    }
+    #[inline]
+    pub fn format(&self) -> OrientationFormat {
+        match self {
+            Orientation::Straight | Orientation::UpsideDown => OrientationFormat::Landscape,
+            Orientation::LeftDown | Orientation::RightDown => OrientationFormat::Portrait,
         }
     }
     fn translate_bbox(&self, bbox: Rectangle) -> Rectangle {
-        match self {
-            Orientation::Straight | Orientation::UpsideDown => bbox,
-            Orientation::LeftDown => Rectangle {
+        match self.format() {
+            OrientationFormat::Landscape => bbox,
+            OrientationFormat::Portrait => Rectangle {
                 top_left: Default::default(),
                 size: Size {
                     width: bbox.size.height,
                     height: bbox.size.width,
                 },
             },
+        }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use embedded_graphics::prelude::Point;
+    use strum::IntoEnumIterator;
+
+    use crate::display::Orientation;
+
+    #[test]
+    fn test_translate_and_reverse() {
+        for o in Orientation::iter() {
+            let p = Point { x: 7, y: 13 };
+            let p1 = o.translate_point(p);
+            let p2 = o.translate_reverse(p1);
+            assert_eq!(p, p2, "Orientation {o:?}");
         }
     }
 }

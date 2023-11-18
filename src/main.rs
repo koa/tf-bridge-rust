@@ -1,38 +1,41 @@
-use std::error::Error;
-use std::fmt::Debug;
-use std::future::Future;
-use std::time::{Duration, SystemTime};
+use std::{
+    error::Error,
+    fmt::Debug,
+    time::{Duration, SystemTime},
+};
 
 use actix_web::{get, App, HttpServer};
 use actix_web_prometheus::PrometheusMetricsBuilder;
-use bitmap_font::tamzen::FONT_6x12;
-use bitmap_font::TextStyle;
-use embedded_graphics::geometry::Dimensions;
-use embedded_graphics::image::Image;
-use embedded_graphics::pixelcolor::BinaryColor;
-use embedded_graphics::prelude::Primitive;
-use embedded_graphics::prelude::{DrawTarget, Point};
-use embedded_graphics::primitives::{Circle, PrimitiveStyle};
-use embedded_graphics::text::Text;
-use embedded_graphics::Drawable;
+use chrono::Local;
+use embedded_graphics::mono_font::iso_8859_1::FONT_6X12;
+use embedded_graphics::{
+    geometry::Dimensions,
+    image::Image,
+    mono_font::MonoTextStyle,
+    pixelcolor::BinaryColor,
+    prelude::{DrawTarget, Point, Primitive},
+    text::Text,
+    Drawable,
+};
 use env_logger::Env;
 use log::{error, info};
 use prometheus::{gather, Encoder, TextEncoder};
-use tinkerforge::error::TinkerforgeError;
-use tinkerforge::ip_connection::async_io::AsyncIpConnection;
-use tinkerforge::ip_connection::{EnumerateResponse, EnumerationType};
-use tinkerforge::lcd_128x64_bricklet::{Lcd128x64Bricklet, TouchPositionEvent};
-use tinkerforge::master_brick::MasterBrick;
-use tokio::net::ToSocketAddrs;
-use tokio::task::JoinHandle;
-use tokio::time::sleep;
-use tokio::{join, pin};
+use tinkerforge::{
+    error::TinkerforgeError,
+    ip_connection::async_io::AsyncIpConnection,
+    ip_connection::{EnumerateResponse, EnumerationType},
+    lcd_128x64_bricklet::{Lcd128x64Bricklet, TouchPositionEvent},
+    master_brick::MasterBrick,
+};
+use tokio::{join, net::ToSocketAddrs, pin, task::JoinHandle, time::sleep};
 use tokio_stream::StreamExt;
 
 use crate::display::{Lcd128x64BrickletDisplay, Orientation};
 use crate::settings::CONFIG;
+use crate::simple_layout::{Layoutable, Placement};
 
 mod display;
+mod simple_layout;
 
 mod icons;
 mod settings;
@@ -99,15 +102,13 @@ async fn run_enumeration_listener<T: ToSocketAddrs>(addr: T) -> Result<(), Tinke
                         let mut display = Lcd128x64BrickletDisplay::new(
                             &paket.uid,
                             ipcon.clone(),
-                            Orientation::UpsideDown,
+                            Orientation::RightDown,
                         )
                         .await?;
-                        let text = Text::new(
-                            "Hello World!\n",
-                            Point::zero(),
-                            TextStyle::new(&FONT_6x12, BinaryColor::On),
-                        );
-                        let p = text.draw(&mut display).expect("No error possible");
+                        let display_area = display.bounding_box();
+                        let text_style = MonoTextStyle::new(&FONT_6X12, BinaryColor::On);
+                        let text = Text::new("Hello World!\n", Point { x: 0, y: 10 }, text_style);
+                        text.draw(&mut display).expect("No error possible");
                         Image::new(&icons::COLOR, Point { x: 30, y: 20 })
                             .draw(&mut display)
                             .unwrap();
@@ -130,7 +131,7 @@ async fn run_enumeration_listener<T: ToSocketAddrs>(addr: T) -> Result<(), Tinke
                                 let now = SystemTime::now();
                                 let elapsed = now.duration_since(last_touch_time);
                                 if let Ok(elapsed) = elapsed {
-                                    if elapsed.as_millis() < 200 || pressure < 20 {
+                                    if elapsed.as_millis() < 100 || pressure < 20 {
                                         println!("Skipped");
                                         continue;
                                     }
@@ -138,17 +139,29 @@ async fn run_enumeration_listener<T: ToSocketAddrs>(addr: T) -> Result<(), Tinke
                                 }
                                 last_touch_time = now;
                                 touch_count += 1;
-                                let start_time = SystemTime::now();
+                                let clock = Local::now().format("%H:%M").to_string();
                                 display.clear();
-                                let cursor_pos = text.draw(&mut display).unwrap();
-                                Text::new(
-                                    format!("p: {pressure}, x: {x}, y: {y}\n{touch_count}")
-                                        .as_str(),
-                                    cursor_pos,
-                                    TextStyle::new(&FONT_6x12, BinaryColor::On),
+                                let text = Text::new(&clock, Point::zero(), text_style);
+                                let p = Placement {
+                                    position: Point { x: 0, y: 0 },
+                                    size: Default::default(),
+                                };
+                                text.draw_placed(&mut display, p);
+                                /*
+                                LinearLayout::vertical(
+                                    Chain::new(Text::new(&clock, Point::zero(), text_style))
+                                        .append(Text::new(
+                                            format!("p: {pressure}").as_str(),
+                                            Point::zero(),
+                                            text_style,
+                                        )),
                                 )
+                                .with_alignment(horizontal::Center)
+                                .with_spacing(DistributeFill(display_area.size.height))
+                                .arrange()
+                                .align_to(&display_area, horizontal::Center, vertical::Center)
                                 .draw(&mut display)
-                                .expect("will not happen");
+                                .unwrap();
                                 let d = pressure / 6;
                                 Circle::new(
                                     Point::new((x - d / 2) as i32, (y - d / 2) as i32),
@@ -157,8 +170,8 @@ async fn run_enumeration_listener<T: ToSocketAddrs>(addr: T) -> Result<(), Tinke
                                 .into_styled(PrimitiveStyle::with_stroke(BinaryColor::On, 1))
                                 .draw(&mut display)
                                 .expect("No error");
+                                 */
                                 display.draw().await.expect("will not happen");
-                                //println!("Time: {:?}", start_time.elapsed());
                             }
                             println!("Thread done");
                         });
