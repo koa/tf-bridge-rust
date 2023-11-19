@@ -8,6 +8,7 @@ use actix_web::{get, App, HttpServer};
 use actix_web_prometheus::PrometheusMetricsBuilder;
 use chrono::Local;
 use embedded_graphics::mono_font::iso_8859_1::FONT_6X12;
+use embedded_graphics::primitives::Rectangle;
 use embedded_graphics::{
     geometry::Dimensions,
     image::Image,
@@ -19,6 +20,7 @@ use embedded_graphics::{
 };
 use env_logger::Env;
 use log::{error, info};
+use prometheus::proto::LabelPair;
 use prometheus::{gather, Encoder, TextEncoder};
 use tinkerforge::{
     error::TinkerforgeError,
@@ -32,7 +34,7 @@ use tokio_stream::StreamExt;
 
 use crate::display::{Lcd128x64BrickletDisplay, Orientation};
 use crate::settings::CONFIG;
-use crate::simple_layout::{Layoutable, Placement};
+use crate::simple_layout::{expand, Layoutable, LinearPair, Vertical};
 
 mod display;
 mod simple_layout;
@@ -141,12 +143,17 @@ async fn run_enumeration_listener<T: ToSocketAddrs>(addr: T) -> Result<(), Tinke
                                 touch_count += 1;
                                 let clock = Local::now().format("%H:%M").to_string();
                                 display.clear();
-                                let text = Text::new(&clock, Point::zero(), text_style);
-                                let p = Placement {
-                                    position: Point { x: 0, y: 0 },
-                                    size: Default::default(),
-                                };
-                                text.draw_placed(&mut display, p);
+                                let clock_text = Text::new(&clock, Point::zero(), text_style);
+
+                                let rectangle = display.bounding_box();
+                                //clock_text.draw_placed(&mut display, rectangle);
+                                let pressure_string = format!("p: {pressure}\nXYq");
+                                let vertical_layout: LinearPair<_, _, _, Vertical> = (
+                                    expand(clock_text),
+                                    Text::new(pressure_string.as_str(), Point::zero(), text_style),
+                                )
+                                    .into();
+                                vertical_layout.draw_placed(&mut display, rectangle);
                                 /*
                                 LinearLayout::vertical(
                                     Chain::new(Text::new(&clock, Point::zero(), text_style))
