@@ -1,27 +1,13 @@
-use std::{
-    error::Error,
-    fmt::Debug,
-    time::{Duration, SystemTime},
-};
+use std::{error::Error, fmt::Debug, time::Duration};
 
 use actix_web::{get, App, HttpServer};
 use actix_web_prometheus::PrometheusMetricsBuilder;
 use chrono::Local;
-use embedded_graphics::mono_font::iso_8859_1::FONT_6X12;
-use embedded_graphics::primitives::Rectangle;
-use embedded_graphics::{
-    geometry::Dimensions,
-    image::Image,
-    mono_font::MonoTextStyle,
-    pixelcolor::BinaryColor,
-    prelude::{DrawTarget, Point, Primitive},
-    text::Text,
-    Drawable,
-};
+use embedded_graphics::prelude::Point;
 use env_logger::Env;
 use log::{error, info};
-use prometheus::proto::LabelPair;
 use prometheus::{gather, Encoder, TextEncoder};
+use thiserror::Error;
 use tinkerforge::{
     error::TinkerforgeError,
     ip_connection::async_io::AsyncIpConnection,
@@ -32,14 +18,16 @@ use tinkerforge::{
 use tokio::{join, net::ToSocketAddrs, pin, task::JoinHandle, time::sleep};
 use tokio_stream::StreamExt;
 
-use crate::display::{Lcd128x64BrickletDisplay, Orientation};
-use crate::settings::CONFIG;
-use crate::simple_layout::{expand, Layoutable, LinearPair, Vertical};
+use crate::{
+    display::{Lcd128x64BrickletDisplay, Orientation},
+    screen_data_renderer::{screen_data, AdjustEvent},
+    settings::CONFIG,
+};
 
 mod display;
-mod simple_layout;
 
 mod icons;
+mod screen_data_renderer;
 mod settings;
 
 const HOST: &str = "localhost";
@@ -72,7 +60,13 @@ async fn health() -> &'static str {
     "Ok"
 }
 
-async fn run_enumeration_listener<T: ToSocketAddrs>(addr: T) -> Result<(), TinkerforgeError> {
+#[derive(Error, Debug)]
+enum TfBridgeError {
+    #[error("Error communicating to device")]
+    TinkerforgeError(#[from] TinkerforgeError),
+}
+
+async fn run_enumeration_listener<T: ToSocketAddrs>(addr: T) -> Result<(), TfBridgeError> {
     let ipcon = AsyncIpConnection::new(addr).await?;
     // Enumerate
     let stream = ipcon.clone().enumerate().await?;
@@ -104,80 +98,43 @@ async fn run_enumeration_listener<T: ToSocketAddrs>(addr: T) -> Result<(), Tinke
                         let mut display = Lcd128x64BrickletDisplay::new(
                             &paket.uid,
                             ipcon.clone(),
-                            Orientation::RightDown,
+                            Orientation::LeftDown,
                         )
                         .await?;
-                        let display_area = display.bounding_box();
-                        let text_style = MonoTextStyle::new(&FONT_6X12, BinaryColor::On);
-                        let text = Text::new("Hello World!\n", Point { x: 0, y: 10 }, text_style);
-                        text.draw(&mut display).expect("No error possible");
-                        Image::new(&icons::COLOR, Point { x: 30, y: 20 })
-                            .draw(&mut display)
-                            .unwrap();
-                        Image::new(&icons::BRIGHTNESS, Point { x: 45, y: 20 })
-                            .draw(&mut display)
-                            .unwrap();
-                        display.draw().await?;
 
                         tokio::spawn(async move {
+                            let mut screen = screen_data(true, true, true);
+                            screen.set_current_tempterature(42.0);
+                            screen.draw(&mut display).expect("Infallible");
+                            display.draw().await.expect("Error writing screen");
                             let mut stream = display.input_stream().await.expect("Cannot config");
-                            let mut touch_count: u32 = 0;
-                            let mut last_touch_time = SystemTime::now();
                             while let Some(TouchPositionEvent {
-                                pressure,
+                                pressure: _pressure,
                                 x,
                                 y,
-                                age,
+                                age: _age,
                             }) = stream.next().await
                             {
-                                let now = SystemTime::now();
-                                let elapsed = now.duration_since(last_touch_time);
-                                if let Ok(elapsed) = elapsed {
-                                    if elapsed.as_millis() < 100 || pressure < 20 {
-                                        println!("Skipped");
-                                        continue;
+                                let touch_point = Point {
+                                    x: x as i32,
+                                    y: y as i32,
+                                };
+                                match screen.process_touch(touch_point) {
+                                    None => {}
+                                    Some(AdjustEvent::Whitebalance(adjustment)) => {
+                                        screen.set_whitebalance(adjustment.new_value().0)
                                     }
-                                    println!("Elapsed: {elapsed:?}, age: {age}");
+                                    Some(AdjustEvent::Brightness(adjustment)) => {
+                                        screen.set_brightness(adjustment.new_value().0);
+                                    }
+                                    Some(AdjustEvent::Temperature(adjustment)) => {
+                                        screen.set_configured_temperature(*adjustment.new_value())
+                                    }
                                 }
-                                last_touch_time = now;
-                                touch_count += 1;
-                                let clock = Local::now().format("%H:%M").to_string();
+                                screen.set_current_time(Local::now());
                                 display.clear();
-                                let clock_text = Text::new(&clock, Point::zero(), text_style);
+                                screen.draw(&mut display).expect("will not happen");
 
-                                let rectangle = display.bounding_box();
-                                //clock_text.draw_placed(&mut display, rectangle);
-                                let pressure_string = format!("p: {pressure}\nXYq");
-                                let vertical_layout: LinearPair<_, _, _, Vertical> = (
-                                    expand(clock_text),
-                                    Text::new(pressure_string.as_str(), Point::zero(), text_style),
-                                )
-                                    .into();
-                                vertical_layout.draw_placed(&mut display, rectangle);
-                                /*
-                                LinearLayout::vertical(
-                                    Chain::new(Text::new(&clock, Point::zero(), text_style))
-                                        .append(Text::new(
-                                            format!("p: {pressure}").as_str(),
-                                            Point::zero(),
-                                            text_style,
-                                        )),
-                                )
-                                .with_alignment(horizontal::Center)
-                                .with_spacing(DistributeFill(display_area.size.height))
-                                .arrange()
-                                .align_to(&display_area, horizontal::Center, vertical::Center)
-                                .draw(&mut display)
-                                .unwrap();
-                                let d = pressure / 6;
-                                Circle::new(
-                                    Point::new((x - d / 2) as i32, (y - d / 2) as i32),
-                                    d as u32,
-                                )
-                                .into_styled(PrimitiveStyle::with_stroke(BinaryColor::On, 1))
-                                .draw(&mut display)
-                                .expect("No error");
-                                 */
                                 display.draw().await.expect("will not happen");
                             }
                             println!("Thread done");
@@ -239,7 +196,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     // Output to the standard output.
     println!("{}", String::from_utf8(buffer).unwrap());
 
-    join!(mgmt_server);
+    join!(mgmt_server).0?;
     Ok(())
 }
 

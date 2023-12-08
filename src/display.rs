@@ -4,7 +4,6 @@ use embedded_graphics::{
     primitives::Rectangle,
     Pixel,
 };
-use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
 use sub_array::SubArray;
 use tinkerforge::error::TinkerforgeError;

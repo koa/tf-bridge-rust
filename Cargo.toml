@@ -23,6 +23,8 @@ env_logger = "0.10.0"
 log = "0.4"
 strum_macros = "0.25.3"
 strum = "0.25.0"
+simple_layout = { path = "../simple_layout" }
+thiserror = "1.0.50"
 
 [build-dependencies]
 image = "0.24.7"
