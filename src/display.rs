@@ -6,11 +6,13 @@ use embedded_graphics::{
 };
 use strum_macros::EnumIter;
 use sub_array::SubArray;
-use tinkerforge::error::TinkerforgeError;
-use tinkerforge::ip_connection::async_io::AsyncIpConnection;
-use tinkerforge::lcd_128x64_bricklet::{
-    Lcd128x64Bricklet, TouchPositionEvent, LCD_128X64_BRICKLET_STATUS_LED_CONFIG_OFF,
-    LCD_128X64_BRICKLET_TOUCH_LED_CONFIG_OFF, LCD_128X64_BRICKLET_TOUCH_LED_CONFIG_ON,
+use tinkerforge::{
+    error::TinkerforgeError,
+    ip_connection::async_io::AsyncIpConnection,
+    lcd_128x64_bricklet::{
+        Lcd128x64Bricklet, TouchPositionEvent, LCD_128X64_BRICKLET_STATUS_LED_CONFIG_OFF,
+        LCD_128X64_BRICKLET_TOUCH_LED_CONFIG_OFF, LCD_128X64_BRICKLET_TOUCH_LED_CONFIG_ON,
+    },
 };
 use tokio_stream::{Stream, StreamExt};
 
@@ -50,17 +52,6 @@ impl DrawTarget for Lcd128x64BrickletDisplay {
         )
     }
 }
-
-/*impl AsRef<BooleanImage<DISPLAY_WIDTH, TOTAL_PIXEL_COUNT>> for Lcd128x64BrickletDisplay {
-    fn as_ref(&self) -> &BooleanImage<DISPLAY_WIDTH, TOTAL_PIXEL_COUNT> {
-        &self.pending_image
-    }
-}
-impl AsMut<BooleanImage<DISPLAY_WIDTH, TOTAL_PIXEL_COUNT>> for Lcd128x64BrickletDisplay {
-    fn as_mut(&mut self) -> &mut BooleanImage<DISPLAY_WIDTH, TOTAL_PIXEL_COUNT> {
-        &mut self.pending_image
-    }
-}*/
 
 impl Lcd128x64BrickletDisplay {
     pub async fn new(
@@ -181,6 +172,16 @@ impl Lcd128x64BrickletDisplay {
                     }
                 },
             ))
+    }
+    pub async fn set_backlight(&mut self, value: u8) -> Result<(), TinkerforgeError> {
+        if self.backlight == value {
+            return Ok(());
+        }
+        self.bricklet
+            .set_display_configuration(self.contrast, value, false, false)
+            .await?;
+        self.backlight = value;
+        Ok(())
     }
 }
 

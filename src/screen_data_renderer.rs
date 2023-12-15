@@ -1,12 +1,12 @@
-use std::num::Saturating;
 use std::{
     marker::PhantomData,
+    num::Saturating,
     ops::{Add, Sub},
 };
 
 use chrono::{DateTime, Local};
-use embedded_graphics::draw_target::DrawTarget;
 use embedded_graphics::{
+    draw_target::DrawTarget,
     geometry::Point,
     image::{Image, ImageRaw},
     mono_font::{iso_8859_1::FONT_6X12, MonoTextStyle},
@@ -15,13 +15,16 @@ use embedded_graphics::{
     primitives::Rectangle,
     text::Text,
 };
+use log::error;
 use simple_layout::prelude::{
     bordered, center, expand, horizontal_layout, optional_placement, owned_text, padding, scale,
     vertical_layout, DashedLine, Layoutable, RoundedLine,
 };
-use tokio_stream::StreamExt;
+use tinkerforge::{error::TinkerforgeError, lcd_128x64_bricklet::TouchPositionEvent};
+use tokio::{sync::mpsc, task::JoinHandle, time::sleep};
+use tokio_stream::{wrappers::ReceiverStream, StreamExt, StreamNotifyClose};
 
-use crate::icons;
+use crate::{display::Lcd128x64BrickletDisplay, events::EventRegistry, icons};
 
 const TEXT_STYLE: MonoTextStyle<BinaryColor> = MonoTextStyle::new(&FONT_6X12, BinaryColor::On);
 
@@ -327,4 +330,92 @@ fn show_adjustable_value<'a, L: Layoutable<BinaryColor> + 'a>(
             0,
         ),
     ))
+}
+
+pub fn start_screen_thread(display: Lcd128x64BrickletDisplay, event_registry: EventRegistry) {
+    tokio::spawn(async move {
+        match screen_thread_loop(display, event_registry).await {
+            Ok(()) => {}
+            Err(e) => {
+                error!("Broke screen thread: {e}")
+            }
+        }
+    });
+}
+enum ScreenMessage {
+    Touched(Point),
+    LocalTime(DateTime<Local>),
+    Closed,
+    Dimm,
+}
+
+async fn screen_thread_loop(
+    mut display: Lcd128x64BrickletDisplay,
+    event_registry: EventRegistry,
+) -> Result<(), TinkerforgeError> {
+    display.set_backlight(0).await?;
+    let mut screen = screen_data(true, true, true);
+    screen.set_current_tempterature(42.0);
+    screen.draw(&mut display).expect("Infallible");
+    display.draw().await?;
+
+    let (rx, tx) = mpsc::channel(2);
+
+    let mut touch_point_stream = StreamNotifyClose::new(display.input_stream().await?)
+        .map(|event| match event {
+            Some(TouchPositionEvent {
+                pressure: _pressure,
+                x,
+                y,
+                age: _age,
+            }) => ScreenMessage::Touched(Point {
+                x: x as i32,
+                y: y as i32,
+            }),
+            None => ScreenMessage::Closed,
+        })
+        .merge(event_registry.clock().await.map(ScreenMessage::LocalTime))
+        .merge(ReceiverStream::new(tx));
+    let mut running_handle = None::<JoinHandle<()>>;
+
+    while let Some((message)) = touch_point_stream.next().await {
+        match message {
+            ScreenMessage::Touched(touch_point) => {
+                match screen.process_touch(touch_point) {
+                    None => {}
+                    Some(AdjustEvent::Whitebalance(adjustment)) => {
+                        screen.set_whitebalance(adjustment.new_value().0)
+                    }
+                    Some(AdjustEvent::Brightness(adjustment)) => {
+                        screen.set_brightness(adjustment.new_value().0);
+                    }
+                    Some(AdjustEvent::Temperature(adjustment)) => {
+                        screen.set_configured_temperature(*adjustment.new_value())
+                    }
+                };
+                display.set_backlight(100).await?;
+                let receiver = rx.clone();
+                if let Some(running) = running_handle.replace(tokio::spawn(async move {
+                    sleep(core::time::Duration::from_secs(10)).await;
+                    if let Err(error) = receiver.send(ScreenMessage::Dimm).await {
+                        error!("Cannot send message: {error}");
+                    }
+                })) {
+                    running.abort();
+                }
+            }
+            ScreenMessage::LocalTime(now) => {
+                screen.set_current_time(now);
+            }
+            ScreenMessage::Dimm => {
+                display.set_backlight(0).await?;
+            }
+            ScreenMessage::Closed => break,
+        };
+        display.clear();
+        screen.draw(&mut display).expect("will not happen");
+
+        display.draw().await?;
+    }
+    Ok(())
 }

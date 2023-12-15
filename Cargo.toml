@@ -9,7 +9,7 @@ edition = "2021"
 chrono = "0.4.31"
 tinkerforge = { version = "2.0.20", registry = "kellnr-berg-turbenthal", path = "../generators/rust/zip", features = ["prometheus"] }
 tokio = "1.33.0"
-tokio-stream = "0.1.14"
+tokio-stream = { version = "0.1.14", features = ["time","sync"] }
 sub-array = "0.1.1"
 bitmap-font = "0.3.0"
 embedded-graphics = "0.8.1"

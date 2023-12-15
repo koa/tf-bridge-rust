@@ -2,8 +2,6 @@ use std::{error::Error, fmt::Debug, time::Duration};
 
 use actix_web::{get, App, HttpServer};
 use actix_web_prometheus::PrometheusMetricsBuilder;
-use chrono::Local;
-use embedded_graphics::prelude::Point;
 use env_logger::Env;
 use log::{error, info};
 use prometheus::{gather, Encoder, TextEncoder};
@@ -12,7 +10,7 @@ use tinkerforge::{
     error::TinkerforgeError,
     ip_connection::async_io::AsyncIpConnection,
     ip_connection::{EnumerateResponse, EnumerationType},
-    lcd_128x64_bricklet::{Lcd128x64Bricklet, TouchPositionEvent},
+    lcd_128x64_bricklet::Lcd128x64Bricklet,
     master_brick::MasterBrick,
 };
 use tokio::{join, net::ToSocketAddrs, pin, task::JoinHandle, time::sleep};
@@ -20,12 +18,14 @@ use tokio_stream::StreamExt;
 
 use crate::{
     display::{Lcd128x64BrickletDisplay, Orientation},
-    screen_data_renderer::{screen_data, AdjustEvent},
+    events::EventRegistry,
+    screen_data_renderer::start_screen_thread,
     settings::CONFIG,
 };
 
 mod display;
 
+mod events;
 mod icons;
 mod screen_data_renderer;
 mod settings;
@@ -66,7 +66,10 @@ enum TfBridgeError {
     TinkerforgeError(#[from] TinkerforgeError),
 }
 
-async fn run_enumeration_listener<T: ToSocketAddrs>(addr: T) -> Result<(), TfBridgeError> {
+async fn run_enumeration_listener<T: ToSocketAddrs>(
+    addr: T,
+    event_registry: EventRegistry,
+) -> Result<(), TfBridgeError> {
     let ipcon = AsyncIpConnection::new(addr).await?;
     // Enumerate
     let stream = ipcon.clone().enumerate().await?;
@@ -95,50 +98,13 @@ async fn run_enumeration_listener<T: ToSocketAddrs>(addr: T) -> Result<(), TfBri
                         println!();
                     }
                     Lcd128x64Bricklet::DEVICE_IDENTIFIER => {
-                        let mut display = Lcd128x64BrickletDisplay::new(
+                        let display = Lcd128x64BrickletDisplay::new(
                             &paket.uid,
                             ipcon.clone(),
                             Orientation::LeftDown,
                         )
                         .await?;
-
-                        tokio::spawn(async move {
-                            let mut screen = screen_data(true, true, true);
-                            screen.set_current_tempterature(42.0);
-                            screen.draw(&mut display).expect("Infallible");
-                            display.draw().await.expect("Error writing screen");
-                            let mut stream = display.input_stream().await.expect("Cannot config");
-                            while let Some(TouchPositionEvent {
-                                pressure: _pressure,
-                                x,
-                                y,
-                                age: _age,
-                            }) = stream.next().await
-                            {
-                                let touch_point = Point {
-                                    x: x as i32,
-                                    y: y as i32,
-                                };
-                                match screen.process_touch(touch_point) {
-                                    None => {}
-                                    Some(AdjustEvent::Whitebalance(adjustment)) => {
-                                        screen.set_whitebalance(adjustment.new_value().0)
-                                    }
-                                    Some(AdjustEvent::Brightness(adjustment)) => {
-                                        screen.set_brightness(adjustment.new_value().0);
-                                    }
-                                    Some(AdjustEvent::Temperature(adjustment)) => {
-                                        screen.set_configured_temperature(*adjustment.new_value())
-                                    }
-                                }
-                                screen.set_current_time(Local::now());
-                                display.clear();
-                                screen.draw(&mut display).expect("will not happen");
-
-                                display.draw().await.expect("will not happen");
-                            }
-                            println!("Thread done");
-                        });
+                        start_screen_thread(display, event_registry.clone());
                     }
                     _ => {}
                 }
@@ -152,12 +118,14 @@ async fn run_enumeration_listener<T: ToSocketAddrs>(addr: T) -> Result<(), TfBri
 
 fn start_enumeration_listener<T: ToSocketAddrs + Clone + Debug + Send + Sync + 'static>(
     connection: T,
+    event_registry: EventRegistry,
 ) -> JoinHandle<()> {
     let connection = connection.clone();
     tokio::spawn(async move {
         let socket_str = format!("{connection:?}");
         loop {
-            match run_enumeration_listener(connection.clone()).await {
+            let clock_stream = event_registry.clone();
+            match run_enumeration_listener(connection.clone(), clock_stream).await {
                 Ok(_) => {
                     info!("{socket_str}: Closed");
                     break;
@@ -187,7 +155,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .workers(2)
         .run();
 
-    start_enumeration_listener((HOST, PORT));
+    let event_registry = EventRegistry::new();
+
+    start_enumeration_listener((HOST, PORT), event_registry);
     let mut buffer = vec![];
     let encoder = TextEncoder::new();
     let metrics = gather();
