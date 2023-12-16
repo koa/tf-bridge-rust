@@ -1,10 +1,11 @@
+use std::time::SystemTime;
 use std::{
     marker::PhantomData,
     num::Saturating,
     ops::{Add, Sub},
 };
 
-use chrono::{DateTime, Local};
+use chrono::{DateTime, Local, Timelike};
 use embedded_graphics::{
     draw_target::DrawTarget,
     geometry::Point,
@@ -15,7 +16,7 @@ use embedded_graphics::{
     primitives::Rectangle,
     text::Text,
 };
-use log::error;
+use log::{error, info};
 use simple_layout::prelude::{
     bordered, center, expand, horizontal_layout, optional_placement, owned_text, padding, scale,
     vertical_layout, DashedLine, Layoutable, RoundedLine,
@@ -24,7 +25,8 @@ use tinkerforge::{error::TinkerforgeError, lcd_128x64_bricklet::TouchPositionEve
 use tokio::{sync::mpsc, task::JoinHandle, time::sleep};
 use tokio_stream::{wrappers::ReceiverStream, StreamExt, StreamNotifyClose};
 
-use crate::{display::Lcd128x64BrickletDisplay, events::EventRegistry, icons};
+use crate::registry::ClockKey;
+use crate::{display::Lcd128x64BrickletDisplay, icons, registry::EventRegistry};
 
 const TEXT_STYLE: MonoTextStyle<BinaryColor> = MonoTextStyle::new(&FONT_6X12, BinaryColor::On);
 
@@ -69,7 +71,13 @@ impl<LT: Layoutable<BinaryColor>, LWB: Layoutable<BinaryColor>, LBR: Layoutable<
         target: &mut impl DrawTarget<Color = BinaryColor, Error = DrawError>,
     ) -> Result<(), DrawError> {
         let rectangle = target.bounding_box();
-        let clock = Local::now().format("%H:%M").to_string();
+        let clock = if self.current_time.second() % 2 == 0 {
+            self.current_time.format("%H:%M")
+        } else {
+            self.current_time.format("%H %M")
+        }
+        .to_string();
+        //let clock = self.current_time.format("%H:%M").to_string();
         let clock_text = Text::new(&clock, Point::zero(), TEXT_STYLE);
         let temperature_element = self
             .configured_temperature
@@ -374,11 +382,17 @@ async fn screen_thread_loop(
             }),
             None => ScreenMessage::Closed,
         })
-        .merge(event_registry.clock().await.map(ScreenMessage::LocalTime))
+        .merge(
+            event_registry
+                .clock(ClockKey::MinuteClock)
+                .await
+                .map(ScreenMessage::LocalTime),
+        )
         .merge(ReceiverStream::new(tx));
     let mut running_handle = None::<JoinHandle<()>>;
 
     while let Some((message)) = touch_point_stream.next().await {
+        let start_time = SystemTime::now();
         match message {
             ScreenMessage::Touched(touch_point) => {
                 match screen.process_touch(touch_point) {
@@ -414,8 +428,14 @@ async fn screen_thread_loop(
         };
         display.clear();
         screen.draw(&mut display).expect("will not happen");
-
+        if let Ok(duration) = start_time.elapsed() {
+            info!("Prepare time: {:?}", duration);
+        }
+        let start_time = SystemTime::now();
         display.draw().await?;
+        if let Ok(duration) = start_time.elapsed() {
+            info!("Write time: {:?}", duration);
+        }
     }
     Ok(())
 }

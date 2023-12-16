@@ -87,9 +87,10 @@ impl Lcd128x64BrickletDisplay {
         while current_pos < pixel_count {
             //println!("Scan from {current_pos}");
             while current_pos < pixel_count
-                && self.current_image[current_pos] == self.pending_image.data[current_pos]
+                && self.current_image[current_pos..current_pos + 32]
+                    == self.pending_image.data[current_pos..current_pos + 32]
             {
-                current_pos += 1;
+                current_pos += 32;
             }
             if current_pos >= TOTAL_PIXEL_COUNT {
                 break;

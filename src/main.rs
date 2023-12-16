@@ -18,15 +18,17 @@ use tokio_stream::StreamExt;
 
 use crate::{
     display::{Lcd128x64BrickletDisplay, Orientation},
-    events::EventRegistry,
+    registry::EventRegistry,
     screen_data_renderer::start_screen_thread,
     settings::CONFIG,
 };
 
+mod register;
+
 mod display;
 
-mod events;
 mod icons;
+mod registry;
 mod screen_data_renderer;
 mod settings;
 

@@ -25,6 +25,7 @@ strum_macros = "0.25.3"
 strum = "0.25.0"
 simple_layout = { path = "../simple_layout" }
 thiserror = "1.0.50"
+async-trait = "0.1.74"
 
 [build-dependencies]
 image = "0.24.7"
