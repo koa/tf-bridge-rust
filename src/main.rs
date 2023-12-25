@@ -6,14 +6,14 @@ use env_logger::Env;
 use log::{error, info};
 use prometheus::{gather, Encoder, TextEncoder};
 use thiserror::Error;
-use tinkerforge::{
+use tinkerforge_async::{
     error::TinkerforgeError,
     ip_connection::async_io::AsyncIpConnection,
     ip_connection::{EnumerateResponse, EnumerationType},
     lcd_128x64_bricklet::Lcd128x64Bricklet,
     master_brick::MasterBrick,
 };
-use tokio::{join, net::ToSocketAddrs, pin, task::JoinHandle, time::sleep};
+use tokio::{join, net::ToSocketAddrs, pin, task, task::JoinHandle, time::sleep};
 use tokio_stream::StreamExt;
 
 use crate::{
@@ -123,7 +123,7 @@ fn start_enumeration_listener<T: ToSocketAddrs + Clone + Debug + Send + Sync + '
     event_registry: EventRegistry,
 ) -> JoinHandle<()> {
     let connection = connection.clone();
-    tokio::spawn(async move {
+    task::spawn(async move {
         let socket_str = format!("{connection:?}");
         loop {
             let clock_stream = event_registry.clone();
@@ -159,7 +159,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let event_registry = EventRegistry::new();
 
-    start_enumeration_listener((HOST, PORT), event_registry);
+    let handle = start_enumeration_listener((HOST, PORT), event_registry);
+    let handle1 = handle.abort_handle();
+    handle1.abort();
     let mut buffer = vec![];
     let encoder = TextEncoder::new();
     let metrics = gather();

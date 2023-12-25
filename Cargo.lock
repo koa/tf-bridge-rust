@@ -1923,7 +1923,7 @@ dependencies = [
  "strum_macros",
  "sub-array",
  "thiserror",
- "tinkerforge",
+ "tinkerforge-async",
  "tokio",
  "tokio-stream",
  "tokio-util",
@@ -1990,8 +1990,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "tinkerforge"
-version = "2.0.20"
+name = "tinkerforge-async"
+version = "0.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0d0e2d4069a7b8c3e7b4a25f9464cea3f6a819de445fc0cf6f80f266cb47df88"
 dependencies = [
  "byteorder",
  "futures-core",

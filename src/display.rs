@@ -6,7 +6,7 @@ use embedded_graphics::{
 };
 use strum_macros::EnumIter;
 use sub_array::SubArray;
-use tinkerforge::{
+use tinkerforge_async::{
     error::TinkerforgeError,
     ip_connection::async_io::AsyncIpConnection,
     lcd_128x64_bricklet::{

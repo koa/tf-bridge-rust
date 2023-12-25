@@ -22,7 +22,7 @@ use simple_layout::prelude::{
     vertical_layout, DashedLine, Layoutable, RoundedLine,
 };
 use thiserror::Error;
-use tinkerforge::{error::TinkerforgeError, lcd_128x64_bricklet::TouchPositionEvent};
+use tinkerforge_async::{error::TinkerforgeError, lcd_128x64_bricklet::TouchPositionEvent};
 use tokio::{
     sync::mpsc::{self, error::SendError},
     task::JoinHandle,
@@ -346,7 +346,10 @@ fn show_adjustable_value<'a, L: Layoutable<BinaryColor> + 'a>(
     ))
 }
 
-pub fn start_screen_thread(display: Lcd128x64BrickletDisplay, event_registry: EventRegistry) {
+pub fn start_screen_thread(
+    display: Lcd128x64BrickletDisplay,
+    event_registry: EventRegistry,
+) -> JoinHandle<()> {
     tokio::spawn(async move {
         match screen_thread_loop(
             display,
@@ -364,7 +367,7 @@ pub fn start_screen_thread(display: Lcd128x64BrickletDisplay, event_registry: Ev
                 error!("Broke screen thread: {e}")
             }
         }
-    });
+    })
 }
 
 #[derive(Debug, Error)]
