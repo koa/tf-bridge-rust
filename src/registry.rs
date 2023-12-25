@@ -1,14 +1,10 @@
-use std::collections::HashMap;
-use std::future::Future;
-use std::ops::DerefMut;
-use std::sync::Arc;
-use std::time::Duration;
+use std::num::Saturating;
+use std::{collections::HashMap, future::Future, ops::DerefMut, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use chrono::{DateTime, Local, Timelike};
 use log::error;
-use tokio::sync::Mutex;
-use tokio::time::sleep;
+use tokio::{sync::mpsc::Sender, sync::Mutex, time::sleep};
 use tokio_stream::Stream;
 
 use crate::register::Register;
@@ -24,6 +20,24 @@ pub enum ClockKey {
 }
 impl TypedKey for ClockKey {
     type Value = DateTime<Local>;
+}
+
+#[derive(Copy, Clone, Eq, PartialEq, Hash)]
+pub enum TemperatureKey {
+    CurrentTemperature,
+    TargetTemperature,
+}
+impl TypedKey for TemperatureKey {
+    type Value = f32;
+}
+
+#[derive(Copy, Clone, Eq, PartialEq, Hash)]
+pub enum LightColorKey {
+    IlluminationColor,
+}
+#[derive(Copy, Clone, Eq, PartialEq, Hash)]
+pub enum BrightnessKey {
+    IlluminationBrightness,
 }
 #[async_trait]
 pub trait KeyAccess<K: TypedKey<Value = V>, V: Clone + Sync + Send + 'static> {
@@ -69,25 +83,31 @@ impl KeyAccess<ClockKey, DateTime<Local>> for EventRegistry {
  */
 
 struct InnerEventRegistry {
-    clock_receivers: HashMap<ClockKey, Register<DateTime<Local>>>,
+    clock_registers: HashMap<ClockKey, Register<DateTime<Local>>>,
+    temperature_registers: HashMap<TemperatureKey, Register<f32>>,
+    light_color_registers: HashMap<LightColorKey, Register<Saturating<u16>>>,
+    brightness_color_registers: HashMap<BrightnessKey, Register<Saturating<u8>>>,
 }
 
-impl EventRegistry {
-    //pub async fn clock(&self) -> impl Stream<Item = DateTime<Local>> {
-    // BroadcastStream::new(self.inner.lock().await.clock_receiver.resubscribe())
-    //     .filter_map(|e| e.ok())
-    //}
-    pub fn new() -> Self {
-        Self {
-            inner: Arc::new(Mutex::new(InnerEventRegistry::new())),
-        }
-    }
-    pub async fn clock(&self, key: ClockKey) -> impl Stream<Item = DateTime<Local>> {
-        let mut guard = self.inner.lock().await;
-        guard
-            .deref_mut()
-            .clock_receivers
+impl InnerEventRegistry {
+    fn temperature_register(&mut self, key: TemperatureKey) -> &mut Register<f32> {
+        self.temperature_registers
             .entry(key)
+            .or_insert_with(|| Register::new(21.0))
+    }
+    fn light_color_register(&mut self, key: LightColorKey) -> &mut Register<Saturating<u16>> {
+        self.light_color_registers
+            .entry(key)
+            .or_insert_with(|| Register::new(Saturating(200)))
+    }
+    fn brightness_register(&mut self, key: BrightnessKey) -> &mut Register<Saturating<u8>> {
+        self.brightness_color_registers
+            .entry(key)
+            .or_insert_with(|| Register::new(Saturating(128)))
+    }
+    fn clock(&mut self, clock_key: ClockKey) -> &mut Register<DateTime<Local>> {
+        self.clock_registers
+            .entry(clock_key)
             .or_insert_with_key(|clock_key| {
                 let step_size = match clock_key {
                     ClockKey::MinuteClock => Duration::from_secs(60).as_millis() as u32,
@@ -112,15 +132,94 @@ impl EventRegistry {
                 });
                 clock_receiver
             })
+    }
+}
+
+impl EventRegistry {
+    //pub async fn clock(&self) -> impl Stream<Item = DateTime<Local>> {
+    // BroadcastStream::new(self.inner.lock().await.clock_receiver.resubscribe())
+    //     .filter_map(|e| e.ok())
+    //}
+    pub fn new() -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(InnerEventRegistry::new())),
+        }
+    }
+    pub async fn clock(&self, key: ClockKey) -> impl Stream<Item = DateTime<Local>> {
+        self.inner
+            .lock()
+            .await
+            .deref_mut()
+            .clock(key)
             .stream()
             .await
+    }
+    pub async fn temperature_stream(&self, temperature: TemperatureKey) -> impl Stream<Item = f32> {
+        self.inner
+            .lock()
+            .await
+            .deref_mut()
+            .temperature_register(temperature)
+            .stream()
+            .await
+    }
+    pub async fn temperature_sender(&self, temperature: TemperatureKey) -> Sender<f32> {
+        self.inner
+            .lock()
+            .await
+            .deref_mut()
+            .temperature_register(temperature)
+            .sender()
+    }
+    pub async fn light_color_stream(
+        &self,
+        light_color: LightColorKey,
+    ) -> impl Stream<Item = Saturating<u16>> {
+        self.inner
+            .lock()
+            .await
+            .deref_mut()
+            .light_color_register(light_color)
+            .stream()
+            .await
+    }
+    pub async fn light_color_sender(&self, light_color: LightColorKey) -> Sender<Saturating<u16>> {
+        self.inner
+            .lock()
+            .await
+            .deref_mut()
+            .light_color_register(light_color)
+            .sender()
+    }
+    pub async fn brightness_stream(
+        &self,
+        brightness_key: BrightnessKey,
+    ) -> impl Stream<Item = Saturating<u8>> {
+        self.inner
+            .lock()
+            .await
+            .deref_mut()
+            .brightness_register(brightness_key)
+            .stream()
+            .await
+    }
+    pub async fn brightness_sender(&self, brightness_key: BrightnessKey) -> Sender<Saturating<u8>> {
+        self.inner
+            .lock()
+            .await
+            .deref_mut()
+            .brightness_register(brightness_key)
+            .sender()
     }
 }
 
 impl InnerEventRegistry {
     fn new() -> Self {
         Self {
-            clock_receivers: Default::default(),
+            clock_registers: Default::default(),
+            temperature_registers: Default::default(),
+            light_color_registers: Default::default(),
+            brightness_color_registers: Default::default(),
         }
     }
 }

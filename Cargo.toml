@@ -26,6 +26,7 @@ strum = "0.25.0"
 simple_layout = { path = "../simple_layout" }
 thiserror = "1.0.50"
 async-trait = "0.1.74"
+tokio-util = "0.7.10"
 
 [build-dependencies]
 image = "0.24.7"

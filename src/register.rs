@@ -1,10 +1,12 @@
 use log::error;
-use tokio::sync::mpsc::error::SendError;
-use tokio::sync::mpsc::Sender;
-use tokio::sync::{mpsc, watch};
-use tokio::task::JoinHandle;
-use tokio_stream::wrappers::{ReceiverStream, WatchStream};
-use tokio_stream::{Stream, StreamExt};
+use tokio::{
+    sync::{mpsc, watch},
+    task::JoinHandle,
+};
+use tokio_stream::{
+    wrappers::{ReceiverStream, WatchStream},
+    Stream, StreamExt,
+};
 
 pub struct Register<T: Clone + Sync + Send + 'static> {
     rx: watch::Receiver<T>,
@@ -39,10 +41,7 @@ impl<T: Clone + Sync + Send + 'static> Register<T> {
     pub async fn stream(&self) -> impl Stream<Item = T> {
         WatchStream::new(self.rx.clone())
     }
-    pub fn sender(&self) -> Sender<T> {
+    pub fn sender(&self) -> mpsc::Sender<T> {
         self.tx.clone()
-    }
-    pub async fn set(&self, value: T) -> Result<(), SendError<T>> {
-        self.tx.send(value).await
     }
 }

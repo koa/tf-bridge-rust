@@ -1,8 +1,8 @@
-use std::time::SystemTime;
 use std::{
     marker::PhantomData,
     num::Saturating,
     ops::{Add, Sub},
+    time::SystemTime,
 };
 
 use chrono::{DateTime, Local, Timelike};
@@ -21,11 +21,17 @@ use simple_layout::prelude::{
     bordered, center, expand, horizontal_layout, optional_placement, owned_text, padding, scale,
     vertical_layout, DashedLine, Layoutable, RoundedLine,
 };
+use thiserror::Error;
 use tinkerforge::{error::TinkerforgeError, lcd_128x64_bricklet::TouchPositionEvent};
-use tokio::{sync::mpsc, task::JoinHandle, time::sleep};
-use tokio_stream::{wrappers::ReceiverStream, StreamExt, StreamNotifyClose};
+use tokio::{
+    sync::mpsc::{self, error::SendError},
+    task::JoinHandle,
+    time::sleep,
+};
+use tokio_stream::{empty, wrappers::ReceiverStream, StreamExt, StreamNotifyClose};
+use tokio_util::either::Either;
 
-use crate::registry::ClockKey;
+use crate::registry::{BrightnessKey, ClockKey, LightColorKey, TemperatureKey};
 use crate::{display::Lcd128x64BrickletDisplay, icons, registry::EventRegistry};
 
 const TEXT_STYLE: MonoTextStyle<BinaryColor> = MonoTextStyle::new(&FONT_6X12, BinaryColor::On);
@@ -342,7 +348,17 @@ fn show_adjustable_value<'a, L: Layoutable<BinaryColor> + 'a>(
 
 pub fn start_screen_thread(display: Lcd128x64BrickletDisplay, event_registry: EventRegistry) {
     tokio::spawn(async move {
-        match screen_thread_loop(display, event_registry).await {
+        match screen_thread_loop(
+            display,
+            event_registry,
+            Some(ClockKey::MinuteClock),
+            Some(TemperatureKey::CurrentTemperature),
+            Some(TemperatureKey::TargetTemperature),
+            Some(LightColorKey::IlluminationColor),
+            Some(BrightnessKey::IlluminationBrightness),
+        )
+        .await
+        {
             Ok(()) => {}
             Err(e) => {
                 error!("Broke screen thread: {e}")
@@ -350,26 +366,101 @@ pub fn start_screen_thread(display: Lcd128x64BrickletDisplay, event_registry: Ev
         }
     });
 }
+
+#[derive(Debug, Error)]
+pub enum ScreenDataError {
+    #[error("Cannot communicate to device: {0}")]
+    Communication(#[from] TinkerforgeError),
+    #[error("Cannot update temperature {0}")]
+    UpdateTemperature(SendError<f32>),
+    #[error("Cannot update whitebalance {0}")]
+    UpdateWhitebalance(SendError<Saturating<u16>>),
+    #[error("Cannot update brightness {0}")]
+    UpdateBrightness(SendError<Saturating<u8>>),
+}
 enum ScreenMessage {
     Touched(Point),
     LocalTime(DateTime<Local>),
     Closed,
     Dimm,
+    SetCurrentTemperature(f32),
+    UpdateTemperature(f32),
+    UpdateLightColor(Saturating<u16>),
+    UpdateBrightness(Saturating<u8>),
 }
-
 async fn screen_thread_loop(
     mut display: Lcd128x64BrickletDisplay,
     event_registry: EventRegistry,
-) -> Result<(), TinkerforgeError> {
+    clock_key: Option<ClockKey>,
+    current_temperature_key: Option<TemperatureKey>,
+    adjust_temperature_key: Option<TemperatureKey>,
+    light_color_key: Option<LightColorKey>,
+    brightness_key: Option<BrightnessKey>,
+) -> Result<(), ScreenDataError> {
     display.set_backlight(0).await?;
-    let mut screen = screen_data(true, true, true);
-    screen.set_current_tempterature(42.0);
-    screen.draw(&mut display).expect("Infallible");
-    display.draw().await?;
 
     let (rx, tx) = mpsc::channel(2);
 
-    let mut touch_point_stream = StreamNotifyClose::new(display.input_stream().await?)
+    let clock_stream = if let Some(clock) = clock_key {
+        Either::Left(
+            event_registry
+                .clock(clock)
+                .await
+                .map(ScreenMessage::LocalTime),
+        )
+    } else {
+        Either::Right(empty::<ScreenMessage>())
+    };
+    let current_temperature_stream = if let Some(temp_key) = current_temperature_key {
+        Either::Left(
+            event_registry
+                .temperature_stream(temp_key)
+                .await
+                .map(ScreenMessage::SetCurrentTemperature),
+        )
+    } else {
+        Either::Right(empty::<ScreenMessage>())
+    };
+
+    let (adjust_temperature_stream, update_temperature_sender) =
+        if let Some(adjust_temperature_key) = adjust_temperature_key {
+            let current_value_stream = event_registry
+                .temperature_stream(adjust_temperature_key)
+                .await;
+            let value_update_sender = event_registry
+                .temperature_sender(adjust_temperature_key)
+                .await;
+            (
+                Either::Left(current_value_stream.map(ScreenMessage::UpdateTemperature)),
+                Some(value_update_sender),
+            )
+        } else {
+            (Either::Right(empty::<ScreenMessage>()), None)
+        };
+    let (update_color_stream, update_color_sender) = if let Some(light_color_key) = light_color_key
+    {
+        let current_value_stream = event_registry.light_color_stream(light_color_key).await;
+        let value_update_sender = event_registry.light_color_sender(light_color_key).await;
+        (
+            Either::Left(current_value_stream.map(ScreenMessage::UpdateLightColor)),
+            Some(value_update_sender),
+        )
+    } else {
+        (Either::Right(empty::<ScreenMessage>()), None)
+    };
+    let (update_brightness_stream, update_brightness_sender) =
+        if let Some(brightness_key) = brightness_key {
+            let current_value_stream = event_registry.brightness_stream(brightness_key).await;
+            let value_update_sender = event_registry.brightness_sender(brightness_key).await;
+            (
+                Either::Left(current_value_stream.map(ScreenMessage::UpdateBrightness)),
+                Some(value_update_sender),
+            )
+        } else {
+            (Either::Right(empty::<ScreenMessage>()), None)
+        };
+
+    let mut message_stream = StreamNotifyClose::new(display.input_stream().await?)
         .map(|event| match event {
             Some(TouchPositionEvent {
                 pressure: _pressure,
@@ -382,34 +473,56 @@ async fn screen_thread_loop(
             }),
             None => ScreenMessage::Closed,
         })
-        .merge(
-            event_registry
-                .clock(ClockKey::MinuteClock)
-                .await
-                .map(ScreenMessage::LocalTime),
-        )
+        .merge(clock_stream)
+        .merge(current_temperature_stream)
+        .merge(adjust_temperature_stream)
+        .merge(update_color_stream)
+        .merge(update_brightness_stream)
         .merge(ReceiverStream::new(tx));
-    let mut running_handle = None::<JoinHandle<()>>;
 
-    while let Some((message)) = touch_point_stream.next().await {
+    let mut dimm_timer_handle = None::<JoinHandle<()>>;
+    let mut screen = screen_data(
+        update_temperature_sender.is_some(),
+        update_color_sender.is_some(),
+        true,
+    );
+    screen.draw(&mut display).expect("Infallible");
+    display.draw().await?;
+
+    while let Some((message)) = message_stream.next().await {
         let start_time = SystemTime::now();
         match message {
             ScreenMessage::Touched(touch_point) => {
                 match screen.process_touch(touch_point) {
                     None => {}
                     Some(AdjustEvent::Whitebalance(adjustment)) => {
-                        screen.set_whitebalance(adjustment.new_value().0)
+                        if let Some(sender) = &update_color_sender {
+                            sender
+                                .send(*adjustment.new_value())
+                                .await
+                                .map_err(ScreenDataError::UpdateWhitebalance)?;
+                        }
                     }
                     Some(AdjustEvent::Brightness(adjustment)) => {
-                        screen.set_brightness(adjustment.new_value().0);
+                        if let Some(sender) = &update_brightness_sender {
+                            sender
+                                .send(*adjustment.new_value())
+                                .await
+                                .map_err(ScreenDataError::UpdateBrightness)?;
+                        }
                     }
                     Some(AdjustEvent::Temperature(adjustment)) => {
-                        screen.set_configured_temperature(*adjustment.new_value())
+                        if let Some(sender) = &update_temperature_sender {
+                            sender
+                                .send(*adjustment.new_value())
+                                .await
+                                .map_err(ScreenDataError::UpdateTemperature)?;
+                        }
                     }
                 };
                 display.set_backlight(100).await?;
                 let receiver = rx.clone();
-                if let Some(running) = running_handle.replace(tokio::spawn(async move {
+                if let Some(running) = dimm_timer_handle.replace(tokio::spawn(async move {
                     sleep(core::time::Duration::from_secs(10)).await;
                     if let Err(error) = receiver.send(ScreenMessage::Dimm).await {
                         error!("Cannot send message: {error}");
@@ -425,6 +538,14 @@ async fn screen_thread_loop(
                 display.set_backlight(0).await?;
             }
             ScreenMessage::Closed => break,
+            ScreenMessage::SetCurrentTemperature(temp) => {
+                screen.set_current_tempterature(temp);
+            }
+            ScreenMessage::UpdateTemperature(temp) => {
+                screen.set_configured_temperature(temp);
+            }
+            ScreenMessage::UpdateLightColor(color) => screen.set_whitebalance(color.0),
+            ScreenMessage::UpdateBrightness(brightness) => screen.set_brightness(brightness.0),
         };
         display.clear();
         screen.draw(&mut display).expect("will not happen");

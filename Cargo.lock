@@ -1926,6 +1926,7 @@ dependencies = [
  "tinkerforge",
  "tokio",
  "tokio-stream",
+ "tokio-util",
 ]
 
 [[package]]
