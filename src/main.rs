@@ -1,23 +1,28 @@
-use std::{error::Error, fmt::Debug, time::Duration};
+use std::{collections::HashMap, error::Error, fmt::Debug, time::Duration};
 
 use actix_web::{get, App, HttpServer};
 use actix_web_prometheus::PrometheusMetricsBuilder;
-use env_logger::Env;
+use env_logger::{Env, TimestampPrecision};
 use log::{error, info};
 use prometheus::{gather, Encoder, TextEncoder};
 use thiserror::Error;
 use tinkerforge_async::{
+    base58::Base58,
+    dmx_bricklet::DmxBricklet,
     error::TinkerforgeError,
-    ip_connection::async_io::AsyncIpConnection,
-    ip_connection::{EnumerateResponse, EnumerationType},
+    io16_v2_bricklet::Io16V2Bricklet,
+    ip_connection::{async_io::AsyncIpConnection, EnumerateResponse, EnumerationType},
     lcd_128x64_bricklet::Lcd128x64Bricklet,
-    master_brick::MasterBrick,
+    motion_detector_v2_bricklet::MotionDetectorV2Bricklet,
 };
-use tokio::{join, net::ToSocketAddrs, pin, task, task::JoinHandle, time::sleep};
+use tokio::{join, net::ToSocketAddrs, pin, sync::mpsc, task, task::JoinHandle, time::sleep};
 use tokio_stream::StreamExt;
 
+use crate::io_handler::DualButtonSettings;
+use crate::registry::DualButtonKey;
 use crate::{
     display::{Lcd128x64BrickletDisplay, Orientation},
+    io_handler::handle_io16_v2,
     registry::EventRegistry,
     screen_data_renderer::start_screen_thread,
     settings::CONFIG,
@@ -28,12 +33,11 @@ mod register;
 mod display;
 
 mod icons;
+mod io_handler;
 mod registry;
 mod screen_data_renderer;
 mod settings;
-
-const HOST: &str = "localhost";
-const PORT: u16 = 4223;
+mod util;
 
 fn print_enumerate_response(response: &EnumerateResponse) {
     println!("UID:               {}", response.uid);
@@ -75,47 +79,104 @@ async fn run_enumeration_listener<T: ToSocketAddrs>(
     let ipcon = AsyncIpConnection::new(addr).await?;
     // Enumerate
     let stream = ipcon.clone().enumerate().await?;
+    let mut running_threads: HashMap<u32, mpsc::Sender<()>> = HashMap::new();
     pin!(stream);
     while let Some(paket) = stream.next().await {
         //print_enumerate_response(&paket);
-        match paket.enumeration_type {
-            EnumerationType::Available | EnumerationType::Connected => {
-                match paket.device_identifier {
-                    MasterBrick::DEVICE_IDENTIFIER => {
-                        let mut brick = MasterBrick::new(&paket.uid, ipcon.clone());
-                        let voltage = brick.get_stack_voltage().await? as f64 / 1000.0;
-                        println!("Voltage: {voltage}V");
-                        let current = brick.get_stack_current().await? as f64 / 1000.0;
-                        println!("Current: {current}A");
-                        let power = current * voltage;
-                        println!("Power  : {power}W");
-                        let extension_type = brick.get_extension_type(0).await?;
-                        println!("Extension: {extension_type}");
-                        let ethernet_config = brick.get_ethernet_configuration().await?;
-                        println!("Eth Config: {ethernet_config:?}");
-                        let ethernet_status = brick.get_ethernet_status().await?;
-                        println!("Eth Status: {ethernet_status:?}");
-                        let connection_type = brick.get_connection_type().await?;
-                        println!("Conn Type: {connection_type}");
-                        println!();
+        match paket.uid.base58_to_u32() {
+            Ok(uid) => {
+                match paket.enumeration_type {
+                    EnumerationType::Available | EnumerationType::Connected => {
+                        match paket.device_identifier {
+                            /*MasterBrick::DEVICE_IDENTIFIER => {
+                                let mut brick = MasterBrick::new(&paket.uid, ipcon.clone());
+                                let voltage = brick.get_stack_voltage().await? as f64 / 1000.0;
+                                println!("Voltage: {voltage}V");
+                                let current = brick.get_stack_current().await? as f64 / 1000.0;
+                                println!("Current: {current}A");
+                                let power = current * voltage;
+                                println!("Power  : {power}W");
+                                let extension_type = brick.get_extension_type(0).await?;
+                                println!("Extension: {extension_type}");
+                                let ethernet_config = brick.get_ethernet_configuration().await?;
+                                println!("Eth Config: {ethernet_config:?}");
+                                let ethernet_status = brick.get_ethernet_status().await?;
+                                println!("Eth Status: {ethernet_status:?}");
+                                let connection_type = brick.get_connection_type().await?;
+                                println!("Conn Type: {connection_type}");
+                                println!();
+                            }*/
+                            Lcd128x64Bricklet::DEVICE_IDENTIFIER => {
+                                info!("Found LCD Device: {}", paket.uid);
+                                let display = Lcd128x64BrickletDisplay::new(
+                                    uid,
+                                    ipcon.clone(),
+                                    Orientation::LeftDown,
+                                )
+                                .await?;
+                                register_handle(
+                                    &mut running_threads,
+                                    uid,
+                                    start_screen_thread(display, event_registry.clone()),
+                                )
+                                .await;
+                            }
+                            DmxBricklet::DEVICE_IDENTIFIER => {
+                                info!("Found DMX Bricklet: {}", paket.uid);
+                            }
+                            Io16V2Bricklet::DEVICE_IDENTIFIER => {
+                                info!("Found IO 16 Bricklet: {}", paket.uid);
+                                let bricklet = Io16V2Bricklet::new(uid, ipcon.clone());
+                                register_handle(
+                                    &mut running_threads,
+                                    uid,
+                                    handle_io16_v2(
+                                        bricklet,
+                                        event_registry.clone(),
+                                        &[DualButtonSettings {
+                                            up_button: 7,
+                                            down_button: 6,
+                                            output: DualButtonKey::DualButton,
+                                        }],
+                                    )
+                                    .await,
+                                )
+                                .await;
+                            }
+                            MotionDetectorV2Bricklet::DEVICE_IDENTIFIER => {
+                                info!("Found Motion detector Bricklet: {}", paket.uid);
+                            }
+
+                            _ => {}
+                        }
                     }
-                    Lcd128x64Bricklet::DEVICE_IDENTIFIER => {
-                        let display = Lcd128x64BrickletDisplay::new(
-                            &paket.uid,
-                            ipcon.clone(),
-                            Orientation::LeftDown,
-                        )
-                        .await?;
-                        start_screen_thread(display, event_registry.clone());
+                    EnumerationType::Disconnected => {
+                        info!("Disconnected device: {}", paket.uid);
                     }
-                    _ => {}
+                    EnumerationType::Unknown => {
+                        info!("Unknown Event: {:?}", paket);
+                    }
                 }
             }
-            EnumerationType::Disconnected => {}
-            EnumerationType::Unknown => {}
-        };
+            Err(error) => {
+                error!("Cannot parse UID {}: {error}", paket.uid)
+            }
+        }
     }
     Ok(())
+}
+
+async fn register_handle(
+    running_threads: &mut HashMap<u32, mpsc::Sender<()>>,
+    uid: u32,
+    abort_handle: mpsc::Sender<()>,
+) {
+    if let Some(old_handle) = running_threads.insert(uid, abort_handle) {
+        //info!("Stop old thread");
+        if let Err(error) = old_handle.send(()).await {
+            error!("Cannot stop thread: {error}")
+        }
+    }
 }
 
 fn start_enumeration_listener<T: ToSocketAddrs + Clone + Debug + Send + Sync + 'static>(
@@ -126,8 +187,7 @@ fn start_enumeration_listener<T: ToSocketAddrs + Clone + Debug + Send + Sync + '
     task::spawn(async move {
         let socket_str = format!("{connection:?}");
         loop {
-            let clock_stream = event_registry.clone();
-            match run_enumeration_listener(connection.clone(), clock_stream).await {
+            match run_enumeration_listener(connection.clone(), event_registry.clone()).await {
                 Ok(_) => {
                     info!("{socket_str}: Closed");
                     break;
@@ -143,10 +203,15 @@ fn start_enumeration_listener<T: ToSocketAddrs + Clone + Debug + Send + Sync + '
 
 #[actix_web::main]
 async fn main() -> Result<(), Box<dyn Error>> {
-    env_logger::init_from_env(Env::default().filter_or("LOG_LEVEL", "info"));
+    env_logger::builder()
+        .parse_env(Env::default().filter_or("LOG_LEVEL", "info"))
+        .format_timestamp(Some(TimestampPrecision::Millis))
+        .init();
+    //env_logger::init_from_env(Env::default().filter_or("LOG_LEVEL", "info"));
 
-    let bind_addr = CONFIG.bind_address();
-    let mgmt_port = CONFIG.mgmt_port();
+    let bind_addr = CONFIG.server.bind_address();
+    let mgmt_port = CONFIG.server.mgmt_port();
+    let tinkerforge = &CONFIG.tinkerforge;
 
     let prometheus = PrometheusMetricsBuilder::new("")
         .endpoint("/metrics")
@@ -158,10 +223,21 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .run();
 
     let event_registry = EventRegistry::new();
+    let mut debug_stream = event_registry
+        .dual_button_stream(DualButtonKey::DualButton)
+        .await;
+    tokio::spawn(async move {
+        while let Some(event) = debug_stream.next().await {
+            info!("Event: {event:?}")
+        }
+    });
+    for endpoint in tinkerforge.endpoints() {
+        start_enumeration_listener(
+            (endpoint.address(), endpoint.port()),
+            event_registry.clone(),
+        );
+    }
 
-    let handle = start_enumeration_listener((HOST, PORT), event_registry);
-    let handle1 = handle.abort_handle();
-    handle1.abort();
     let mut buffer = vec![];
     let encoder = TextEncoder::new();
     let metrics = gather();

@@ -1,3 +1,4 @@
+use std::hash::Hash;
 use std::num::Saturating;
 use std::{collections::HashMap, future::Future, ops::DerefMut, sync::Arc, time::Duration};
 
@@ -38,6 +39,23 @@ pub enum LightColorKey {
 #[derive(Copy, Clone, Eq, PartialEq, Hash)]
 pub enum BrightnessKey {
     IlluminationBrightness,
+}
+
+#[derive(Copy, Clone, Eq, PartialEq, Hash)]
+pub enum DualButtonKey {
+    DualButton,
+}
+#[derive(Copy, Clone, Eq, PartialEq, Hash, Default, Debug)]
+pub enum ButtonState<B: Copy + Clone + Eq + Hash> {
+    #[default]
+    Released,
+    ShortPressStart(B),
+    LongPressStart(B),
+}
+#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
+pub enum DualButtonLayout {
+    UP,
+    DOWN,
 }
 #[async_trait]
 pub trait KeyAccess<K: TypedKey<Value = V>, V: Clone + Sync + Send + 'static> {
@@ -87,6 +105,7 @@ struct InnerEventRegistry {
     temperature_registers: HashMap<TemperatureKey, Register<f32>>,
     light_color_registers: HashMap<LightColorKey, Register<Saturating<u16>>>,
     brightness_color_registers: HashMap<BrightnessKey, Register<Saturating<u8>>>,
+    dual_buttons: HashMap<DualButtonKey, Register<ButtonState<DualButtonLayout>>>,
 }
 
 impl InnerEventRegistry {
@@ -104,6 +123,12 @@ impl InnerEventRegistry {
         self.brightness_color_registers
             .entry(key)
             .or_insert_with(|| Register::new(Saturating(128)))
+    }
+    fn dual_button_register(
+        &mut self,
+        key: DualButtonKey,
+    ) -> &mut Register<ButtonState<DualButtonLayout>> {
+        self.dual_buttons.entry(key).or_default()
     }
     fn clock(&mut self, clock_key: ClockKey) -> &mut Register<DateTime<Local>> {
         self.clock_registers
@@ -211,6 +236,28 @@ impl EventRegistry {
             .brightness_register(brightness_key)
             .sender()
     }
+    pub async fn dual_button_stream(
+        &self,
+        dual_button_key: DualButtonKey,
+    ) -> impl Stream<Item = ButtonState<DualButtonLayout>> {
+        self.inner
+            .lock()
+            .await
+            .deref_mut()
+            .dual_button_register(dual_button_key)
+            .stream()
+            .await
+    }
+    pub async fn dual_button_sender(
+        &self,
+        dual_button_key: DualButtonKey,
+    ) -> Sender<ButtonState<DualButtonLayout>> {
+        self.inner
+            .lock()
+            .await
+            .dual_button_register(dual_button_key)
+            .sender()
+    }
 }
 
 impl InnerEventRegistry {
@@ -220,6 +267,7 @@ impl InnerEventRegistry {
             temperature_registers: Default::default(),
             light_color_registers: Default::default(),
             brightness_color_registers: Default::default(),
+            dual_buttons: Default::default(),
         }
     }
 }

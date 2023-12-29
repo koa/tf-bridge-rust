@@ -55,7 +55,7 @@ impl DrawTarget for Lcd128x64BrickletDisplay {
 
 impl Lcd128x64BrickletDisplay {
     pub async fn new(
-        uid: &str,
+        uid: u32,
         connection: AsyncIpConnection,
         orientation: Orientation,
     ) -> Result<Self, TinkerforgeError> {

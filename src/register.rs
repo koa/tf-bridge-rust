@@ -45,3 +45,8 @@ impl<T: Clone + Sync + Send + 'static> Register<T> {
         self.tx.clone()
     }
 }
+impl<T: Clone + Sync + Send + Default + 'static> Default for Register<T> {
+    fn default() -> Self {
+        Self::new(T::default())
+    }
+}
