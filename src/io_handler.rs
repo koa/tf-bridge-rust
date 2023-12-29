@@ -92,6 +92,19 @@ async fn io_16_v2_loop(
         match message {
             IoMessage::Close => break,
             IoMessage::Press(channel) => {
+                match button_settings.get(channel as usize) {
+                    None => {}
+                    Some(ButtonSetting::DualButtonDown(sender)) => sender
+                        .send(ButtonState::ShortPressStart(DualButtonLayout::DOWN))
+                        .await
+                        .map_err(IoHandlerError::DualButtonDown)?,
+                    Some(ButtonSetting::DualButtonUp(sender)) => sender
+                        .send(ButtonState::ShortPressStart(DualButtonLayout::UP))
+                        .await
+                        .map_err(IoHandlerError::DualButtonUp)?,
+                    Some(ButtonSetting::None) => {}
+                }
+
                 let rx = rx.clone();
                 if let Some(running) =
                     channel_timer
@@ -107,20 +120,20 @@ async fn io_16_v2_loop(
                 {
                     running.abort();
                 }
+            }
+            IoMessage::LongPress(channel) => {
                 match button_settings.get(channel as usize) {
                     None => {}
                     Some(ButtonSetting::DualButtonDown(sender)) => sender
-                        .send(ButtonState::ShortPressStart(DualButtonLayout::DOWN))
+                        .send(ButtonState::LongPressStart(DualButtonLayout::DOWN))
                         .await
                         .map_err(IoHandlerError::DualButtonDown)?,
                     Some(ButtonSetting::DualButtonUp(sender)) => sender
-                        .send(ButtonState::ShortPressStart(DualButtonLayout::UP))
+                        .send(ButtonState::LongPressStart(DualButtonLayout::UP))
                         .await
                         .map_err(IoHandlerError::DualButtonUp)?,
                     Some(ButtonSetting::None) => {}
                 }
-            }
-            IoMessage::LongPress(channel) => {
                 let rx = rx.clone();
                 if let Some(running) =
                     channel_timer
@@ -136,37 +149,25 @@ async fn io_16_v2_loop(
                 {
                     running.abort();
                 }
+            }
+            IoMessage::Release(channel) => {
                 match button_settings.get(channel as usize) {
                     None => {}
                     Some(ButtonSetting::DualButtonDown(sender)) => sender
-                        .send(ButtonState::LongPressStart(DualButtonLayout::DOWN))
+                        .send(ButtonState::Released)
                         .await
-                        .map_err(IoHandlerError::DualButtonDown)?,
+                        .map_err(IoHandlerError::DualButtonRelease)?,
                     Some(ButtonSetting::DualButtonUp(sender)) => sender
-                        .send(ButtonState::LongPressStart(DualButtonLayout::UP))
+                        .send(ButtonState::Released)
                         .await
-                        .map_err(IoHandlerError::DualButtonUp)?,
+                        .map_err(IoHandlerError::DualButtonRelease)?,
                     Some(ButtonSetting::None) => {}
                 }
-            }
-            IoMessage::Release(channel) => {
                 if let Some(timer) = channel_timer
                     .get_mut(channel as usize)
                     .and_then(|t| t.take())
                 {
                     timer.abort();
-                }
-                match button_settings.get(channel as usize) {
-                    None => {}
-                    Some(ButtonSetting::DualButtonDown(sender)) => sender
-                        .send(ButtonState::Released)
-                        .await
-                        .map_err(IoHandlerError::DualButtonRelease)?,
-                    Some(ButtonSetting::DualButtonUp(sender)) => sender
-                        .send(ButtonState::Released)
-                        .await
-                        .map_err(IoHandlerError::DualButtonRelease)?,
-                    Some(ButtonSetting::None) => {}
                 }
             }
             IoMessage::Noop => {}

@@ -108,7 +108,7 @@ struct InnerEventRegistry {
     clock_registers: HashMap<ClockKey, Register<DateTime<Local>>>,
     temperature_registers: HashMap<TemperatureKey, Register<f32>>,
     light_color_registers: HashMap<LightColorKey, Register<Saturating<u16>>>,
-    brightness_color_registers: HashMap<BrightnessKey, Register<Saturating<u8>>>,
+    brightness_color: HashMap<BrightnessKey, Register<Saturating<u8>>>,
     dual_buttons: HashMap<DualButtonKey, Register<ButtonState<DualButtonLayout>>>,
 }
 
@@ -124,7 +124,7 @@ impl InnerEventRegistry {
             .or_insert_with(|| Register::new(Saturating(200)))
     }
     fn brightness_register(&mut self, key: BrightnessKey) -> &mut Register<Saturating<u8>> {
-        self.brightness_color_registers
+        self.brightness_color
             .entry(key)
             .or_insert_with(|| Register::new(Saturating(128)))
     }
@@ -270,7 +270,7 @@ impl InnerEventRegistry {
             clock_registers: Default::default(),
             temperature_registers: Default::default(),
             light_color_registers: Default::default(),
-            brightness_color_registers: Default::default(),
+            brightness_color: Default::default(),
             dual_buttons: Default::default(),
         }
     }

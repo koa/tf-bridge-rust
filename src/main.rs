@@ -19,6 +19,7 @@ use tokio::{join, net::ToSocketAddrs, pin, sync::mpsc, task, task::JoinHandle, t
 use tokio_stream::StreamExt;
 
 use crate::io_handler::DualButtonSettings;
+use crate::light_controller::dual_input_dimmer;
 use crate::registry::{BrightnessKey, ClockKey, DualButtonKey, LightColorKey, TemperatureKey};
 use crate::screen_data_renderer::ScreenSettings;
 use crate::{
@@ -32,6 +33,7 @@ mod display;
 
 mod icons;
 mod io_handler;
+mod light_controller;
 mod registry;
 mod screen_data_renderer;
 mod settings;
@@ -240,6 +242,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
             info!("Event: {event:?}")
         }
     });
+    dual_input_dimmer(
+        event_registry.clone(),
+        DualButtonKey::DualButton,
+        BrightnessKey::IlluminationBrightness,
+    )
+    .await;
     for endpoint in tinkerforge.endpoints() {
         start_enumeration_listener(
             (endpoint.address(), endpoint.port()),
