@@ -1,9 +1,11 @@
-use std::time::SystemTime;
+use core::option::Option;
 
 use log::{error, info};
 use thiserror::Error;
 use tinkerforge_async::{error::TinkerforgeError, io16_v2_bricklet::Io16V2Bricklet};
 use tokio::sync::mpsc;
+use tokio::task::JoinHandle;
+use tokio::time::sleep;
 use tokio_stream::{wrappers::ReceiverStream, StreamExt};
 
 use crate::registry::{ButtonState, DualButtonKey, DualButtonLayout, EventRegistry};
@@ -53,6 +55,7 @@ pub struct DualButtonSettings {
 enum IoMessage {
     Close,
     Press(u8),
+    LongPress(u8),
     Release(u8),
     Noop,
 }
@@ -69,12 +72,9 @@ async fn io_16_v2_loop(
     termination_receiver: mpsc::Receiver<()>,
     button_settings: [ButtonSetting; 16],
 ) -> Result<(), IoHandlerError> {
-    let uid = bricklet
-        .get_identity()
-        .await
-        .ok()
-        .map(|i| i.uid)
-        .unwrap_or_default();
+    let (rx, tx) = mpsc::channel(2);
+    let mut channel_timer: [Option<JoinHandle<()>>; 16] = <[Option<JoinHandle<()>>; 16]>::default();
+
     let button_event_stream = bricklet
         .get_input_value_callback_receiver()
         .await
@@ -86,34 +86,89 @@ async fn io_16_v2_loop(
             }
         });
     let mut receiver = button_event_stream
-        .merge(ReceiverStream::new(termination_receiver).map(|_| IoMessage::Close));
+        .merge(ReceiverStream::new(termination_receiver).map(|_| IoMessage::Close))
+        .merge(ReceiverStream::new(tx));
     while let Some(message) = receiver.next().await {
         match message {
             IoMessage::Close => break,
-            IoMessage::Press(channel) => match button_settings.get(channel as usize) {
-                None => {}
-                Some(ButtonSetting::DualButtonDown(sender)) => sender
-                    .send(ButtonState::ShortPressStart(DualButtonLayout::DOWN))
-                    .await
-                    .map_err(IoHandlerError::DualButtonDown)?,
-                Some(ButtonSetting::DualButtonUp(sender)) => sender
-                    .send(ButtonState::ShortPressStart(DualButtonLayout::UP))
-                    .await
-                    .map_err(IoHandlerError::DualButtonUp)?,
-                Some(ButtonSetting::None) => {}
-            },
-            IoMessage::Release(channel) => match button_settings.get(channel as usize) {
-                None => {}
-                Some(ButtonSetting::DualButtonDown(sender)) => sender
-                    .send(ButtonState::Released)
-                    .await
-                    .map_err(IoHandlerError::DualButtonRelease)?,
-                Some(ButtonSetting::DualButtonUp(sender)) => sender
-                    .send(ButtonState::Released)
-                    .await
-                    .map_err(IoHandlerError::DualButtonRelease)?,
-                Some(ButtonSetting::None) => {}
-            },
+            IoMessage::Press(channel) => {
+                let rx = rx.clone();
+                if let Some(running) =
+                    channel_timer
+                        .get_mut(channel as usize)
+                        .and_then(|timer_option| {
+                            timer_option.replace(tokio::spawn(async move {
+                                sleep(core::time::Duration::from_millis(500)).await;
+                                if let Err(error) = rx.send(IoMessage::LongPress(channel)).await {
+                                    error!("Cannot send message: {error}");
+                                }
+                            }))
+                        })
+                {
+                    running.abort();
+                }
+                match button_settings.get(channel as usize) {
+                    None => {}
+                    Some(ButtonSetting::DualButtonDown(sender)) => sender
+                        .send(ButtonState::ShortPressStart(DualButtonLayout::DOWN))
+                        .await
+                        .map_err(IoHandlerError::DualButtonDown)?,
+                    Some(ButtonSetting::DualButtonUp(sender)) => sender
+                        .send(ButtonState::ShortPressStart(DualButtonLayout::UP))
+                        .await
+                        .map_err(IoHandlerError::DualButtonUp)?,
+                    Some(ButtonSetting::None) => {}
+                }
+            }
+            IoMessage::LongPress(channel) => {
+                let rx = rx.clone();
+                if let Some(running) =
+                    channel_timer
+                        .get_mut(channel as usize)
+                        .and_then(|timer_option| {
+                            timer_option.replace(tokio::spawn(async move {
+                                sleep(core::time::Duration::from_secs(20)).await;
+                                if let Err(error) = rx.send(IoMessage::Release(channel)).await {
+                                    error!("Cannot send message: {error}");
+                                }
+                            }))
+                        })
+                {
+                    running.abort();
+                }
+                match button_settings.get(channel as usize) {
+                    None => {}
+                    Some(ButtonSetting::DualButtonDown(sender)) => sender
+                        .send(ButtonState::LongPressStart(DualButtonLayout::DOWN))
+                        .await
+                        .map_err(IoHandlerError::DualButtonDown)?,
+                    Some(ButtonSetting::DualButtonUp(sender)) => sender
+                        .send(ButtonState::LongPressStart(DualButtonLayout::UP))
+                        .await
+                        .map_err(IoHandlerError::DualButtonUp)?,
+                    Some(ButtonSetting::None) => {}
+                }
+            }
+            IoMessage::Release(channel) => {
+                if let Some(timer) = channel_timer
+                    .get_mut(channel as usize)
+                    .and_then(|t| t.take())
+                {
+                    timer.abort();
+                }
+                match button_settings.get(channel as usize) {
+                    None => {}
+                    Some(ButtonSetting::DualButtonDown(sender)) => sender
+                        .send(ButtonState::Released)
+                        .await
+                        .map_err(IoHandlerError::DualButtonRelease)?,
+                    Some(ButtonSetting::DualButtonUp(sender)) => sender
+                        .send(ButtonState::Released)
+                        .await
+                        .map_err(IoHandlerError::DualButtonRelease)?,
+                    Some(ButtonSetting::None) => {}
+                }
+            }
             IoMessage::Noop => {}
         };
     }

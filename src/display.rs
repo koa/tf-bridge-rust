@@ -55,11 +55,9 @@ impl DrawTarget for Lcd128x64BrickletDisplay {
 
 impl Lcd128x64BrickletDisplay {
     pub async fn new(
-        uid: u32,
-        connection: AsyncIpConnection,
+        mut bricklet: Lcd128x64Bricklet,
         orientation: Orientation,
     ) -> Result<Self, TinkerforgeError> {
-        let mut bricklet = Lcd128x64Bricklet::new(uid, connection);
         bricklet.clear_display().await?;
         bricklet
             .set_status_led_config(LCD_128X64_BRICKLET_STATUS_LED_CONFIG_OFF)

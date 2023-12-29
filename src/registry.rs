@@ -14,7 +14,7 @@ pub trait TypedKey {
     type Value;
 }
 
-#[derive(Copy, Clone, Eq, PartialEq, Hash)]
+#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
 pub enum ClockKey {
     MinuteClock,
     SecondClock,
@@ -23,7 +23,7 @@ impl TypedKey for ClockKey {
     type Value = DateTime<Local>;
 }
 
-#[derive(Copy, Clone, Eq, PartialEq, Hash)]
+#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
 pub enum TemperatureKey {
     CurrentTemperature,
     TargetTemperature,
@@ -32,18 +32,22 @@ impl TypedKey for TemperatureKey {
     type Value = f32;
 }
 
-#[derive(Copy, Clone, Eq, PartialEq, Hash)]
+#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
 pub enum LightColorKey {
     IlluminationColor,
 }
-#[derive(Copy, Clone, Eq, PartialEq, Hash)]
+#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
 pub enum BrightnessKey {
     IlluminationBrightness,
 }
 
-#[derive(Copy, Clone, Eq, PartialEq, Hash)]
+#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
 pub enum DualButtonKey {
     DualButton,
+}
+#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
+pub enum SingleButtonKey {
+    SingleButton,
 }
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Default, Debug)]
 pub enum ButtonState<B: Copy + Clone + Eq + Hash> {

@@ -19,13 +19,11 @@ use tokio::{join, net::ToSocketAddrs, pin, sync::mpsc, task, task::JoinHandle, t
 use tokio_stream::StreamExt;
 
 use crate::io_handler::DualButtonSettings;
-use crate::registry::DualButtonKey;
+use crate::registry::{BrightnessKey, ClockKey, DualButtonKey, LightColorKey, TemperatureKey};
+use crate::screen_data_renderer::ScreenSettings;
 use crate::{
-    display::{Lcd128x64BrickletDisplay, Orientation},
-    io_handler::handle_io16_v2,
-    registry::EventRegistry,
-    screen_data_renderer::start_screen_thread,
-    settings::CONFIG,
+    display::Orientation, io_handler::handle_io16_v2, registry::EventRegistry,
+    screen_data_renderer::start_screen_thread, settings::CONFIG,
 };
 
 mod register;
@@ -108,16 +106,28 @@ async fn run_enumeration_listener<T: ToSocketAddrs>(
                             }*/
                             Lcd128x64Bricklet::DEVICE_IDENTIFIER => {
                                 info!("Found LCD Device: {}", paket.uid);
-                                let display = Lcd128x64BrickletDisplay::new(
-                                    uid,
-                                    ipcon.clone(),
-                                    Orientation::LeftDown,
-                                )
-                                .await?;
                                 register_handle(
                                     &mut running_threads,
                                     uid,
-                                    start_screen_thread(display, event_registry.clone()),
+                                    start_screen_thread(
+                                        Lcd128x64Bricklet::new(uid, ipcon.clone()),
+                                        event_registry.clone(),
+                                        ScreenSettings {
+                                            orientation: Orientation::LeftDown,
+                                            clock_key: Some(ClockKey::MinuteClock),
+                                            current_temperature_key: Some(
+                                                TemperatureKey::CurrentTemperature,
+                                            ),
+                                            adjust_temperature_key: Some(
+                                                TemperatureKey::TargetTemperature,
+                                            ),
+                                            light_color_key: Some(LightColorKey::IlluminationColor),
+                                            brightness_key: Some(
+                                                BrightnessKey::IlluminationBrightness,
+                                            ),
+                                        },
+                                    )
+                                    .await,
                                 )
                                 .await;
                             }
@@ -126,12 +136,11 @@ async fn run_enumeration_listener<T: ToSocketAddrs>(
                             }
                             Io16V2Bricklet::DEVICE_IDENTIFIER => {
                                 info!("Found IO 16 Bricklet: {}", paket.uid);
-                                let bricklet = Io16V2Bricklet::new(uid, ipcon.clone());
                                 register_handle(
                                     &mut running_threads,
                                     uid,
                                     handle_io16_v2(
-                                        bricklet,
+                                        Io16V2Bricklet::new(uid, ipcon.clone()),
                                         event_registry.clone(),
                                         &[DualButtonSettings {
                                             up_button: 7,

@@ -3,7 +3,6 @@ use std::{
     marker::PhantomData,
     num::Saturating,
     ops::{Add, Sub},
-    time::SystemTime,
 };
 
 use chrono::{DateTime, Local, Timelike};
@@ -23,6 +22,7 @@ use simple_layout::prelude::{
     vertical_layout, DashedLine, Layoutable, RoundedLine,
 };
 use thiserror::Error;
+use tinkerforge_async::lcd_128x64_bricklet::Lcd128x64Bricklet;
 use tinkerforge_async::{error::TinkerforgeError, lcd_128x64_bricklet::TouchPositionEvent};
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::{
@@ -34,6 +34,7 @@ use tokio::{
 use tokio_stream::{empty, wrappers::ReceiverStream, StreamExt, StreamNotifyClose};
 use tokio_util::either::Either;
 
+use crate::display::Orientation;
 use crate::registry::{BrightnessKey, ClockKey, LightColorKey, TemperatureKey};
 use crate::{display::Lcd128x64BrickletDisplay, icons, registry::EventRegistry, util};
 
@@ -349,24 +350,14 @@ fn show_adjustable_value<'a, L: Layoutable<BinaryColor> + 'a>(
     ))
 }
 
-pub fn start_screen_thread(
-    display: Lcd128x64BrickletDisplay,
+pub async fn start_screen_thread(
+    bricklet: Lcd128x64Bricklet,
     event_registry: EventRegistry,
+    settings: ScreenSettings,
 ) -> Sender<()> {
     let (tx, rx) = mpsc::channel(1);
     tokio::spawn(async move {
-        match screen_thread_loop(
-            display,
-            event_registry,
-            rx,
-            Some(ClockKey::MinuteClock),
-            Some(TemperatureKey::CurrentTemperature),
-            Some(TemperatureKey::TargetTemperature),
-            Some(LightColorKey::IlluminationColor),
-            Some(BrightnessKey::IlluminationBrightness),
-        )
-        .await
-        {
+        match screen_thread_loop(bricklet, event_registry, rx, settings).await {
             Ok(()) => {
                 info!("Screen thread ended");
             }
@@ -399,17 +390,31 @@ enum ScreenMessage {
     UpdateLightColor(Saturating<u16>),
     UpdateBrightness(Saturating<u8>),
 }
+#[derive(Debug, Clone, Copy)]
+pub struct ScreenSettings {
+    pub orientation: Orientation,
+    pub clock_key: Option<ClockKey>,
+    pub current_temperature_key: Option<TemperatureKey>,
+    pub adjust_temperature_key: Option<TemperatureKey>,
+    pub light_color_key: Option<LightColorKey>,
+    pub brightness_key: Option<BrightnessKey>,
+}
 
 async fn screen_thread_loop(
-    mut display: Lcd128x64BrickletDisplay,
+    bricklet: Lcd128x64Bricklet,
     event_registry: EventRegistry,
     termination_receiver: Receiver<()>,
-    clock_key: Option<ClockKey>,
-    current_temperature_key: Option<TemperatureKey>,
-    adjust_temperature_key: Option<TemperatureKey>,
-    light_color_key: Option<LightColorKey>,
-    brightness_key: Option<BrightnessKey>,
+    settings: ScreenSettings,
 ) -> Result<(), ScreenDataError> {
+    let ScreenSettings {
+        orientation,
+        clock_key,
+        current_temperature_key,
+        adjust_temperature_key,
+        light_color_key,
+        brightness_key,
+    } = settings;
+    let mut display = Lcd128x64BrickletDisplay::new(bricklet, orientation).await?;
     display.set_backlight(0).await?;
     let (rx, tx) = mpsc::channel(2);
 
