@@ -27,6 +27,7 @@ use crate::registry::{
     BrightnessKey, ClockKey, DualButtonKey, LightColorKey, SingleButtonKey, TemperatureKey,
 };
 use crate::screen_data_renderer::ScreenSettings;
+use crate::temperature::handle_temperature;
 use crate::util::kelvin_2_mireds;
 use crate::{
     display::Orientation, io_handler::handle_io16_v2, registry::EventRegistry,
@@ -45,6 +46,7 @@ mod motion_detector;
 mod registry;
 mod screen_data_renderer;
 mod settings;
+mod temperature;
 mod util;
 
 fn print_enumerate_response(response: &EnumerateResponse) {
@@ -203,6 +205,16 @@ async fn run_enumeration_listener<T: ToSocketAddrs>(
                             }
                             TemperatureV2Bricklet::DEVICE_IDENTIFIER => {
                                 info!("Found Temperature Bricklet: {}", paket.uid);
+                                register_handle(
+                                    &mut running_threads,
+                                    uid,
+                                    handle_temperature(
+                                        TemperatureV2Bricklet::new(uid, ipcon.clone()),
+                                        event_registry.clone(),
+                                        TemperatureKey::CurrentTemperature,
+                                    ),
+                                )
+                                .await;
                             }
 
                             _ => {}
