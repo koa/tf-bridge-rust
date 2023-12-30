@@ -1,4 +1,3 @@
-use std::future::Future;
 use std::{
     marker::PhantomData,
     num::Saturating,
@@ -22,21 +21,25 @@ use simple_layout::prelude::{
     vertical_layout, DashedLine, Layoutable, RoundedLine,
 };
 use thiserror::Error;
-use tinkerforge_async::lcd_128x64_bricklet::Lcd128x64Bricklet;
-use tinkerforge_async::{error::TinkerforgeError, lcd_128x64_bricklet::TouchPositionEvent};
-use tokio::sync::mpsc::{Receiver, Sender};
+use tinkerforge_async::{
+    error::TinkerforgeError, lcd_128x64_bricklet::Lcd128x64Bricklet,
+    lcd_128x64_bricklet::TouchPositionEvent,
+};
 use tokio::{
     join,
-    sync::mpsc::{self, error::SendError},
+    sync::mpsc::{self, error::SendError, Receiver, Sender},
     task::JoinHandle,
     time::sleep,
 };
 use tokio_stream::{empty, wrappers::ReceiverStream, StreamExt, StreamNotifyClose};
 use tokio_util::either::Either;
 
-use crate::display::Orientation;
-use crate::registry::{BrightnessKey, ClockKey, LightColorKey, TemperatureKey};
-use crate::{display::Lcd128x64BrickletDisplay, icons, registry::EventRegistry, util};
+use crate::{
+    display::{Lcd128x64BrickletDisplay, Orientation},
+    icons,
+    registry::{BrightnessKey, ClockKey, EventRegistry, LightColorKey, TemperatureKey},
+    util,
+};
 
 const TEXT_STYLE: MonoTextStyle<BinaryColor> = MonoTextStyle::new(&FONT_6X12, BinaryColor::On);
 

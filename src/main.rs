@@ -6,6 +6,7 @@ use env_logger::{Env, TimestampPrecision};
 use log::{error, info};
 use prometheus::{gather, Encoder, TextEncoder};
 use thiserror::Error;
+use tinkerforge_async::temperature_v2_bricklet::TemperatureV2Bricklet;
 use tinkerforge_async::{
     base58::Base58,
     dmx_bricklet::DmxBricklet,
@@ -21,7 +22,10 @@ use tokio_stream::StreamExt;
 use crate::dmx_handler::{handle_dmx, DmxConfigEntry};
 use crate::io_handler::DualButtonSettings;
 use crate::light_controller::dual_input_dimmer;
-use crate::registry::{BrightnessKey, ClockKey, DualButtonKey, LightColorKey, TemperatureKey};
+use crate::motion_detector::handle_motion_detector;
+use crate::registry::{
+    BrightnessKey, ClockKey, DualButtonKey, LightColorKey, SingleButtonKey, TemperatureKey,
+};
 use crate::screen_data_renderer::ScreenSettings;
 use crate::util::kelvin_2_mireds;
 use crate::{
@@ -37,6 +41,7 @@ mod dmx_handler;
 mod icons;
 mod io_handler;
 mod light_controller;
+mod motion_detector;
 mod registry;
 mod screen_data_renderer;
 mod settings;
@@ -185,6 +190,19 @@ async fn run_enumeration_listener<T: ToSocketAddrs>(
                             }
                             MotionDetectorV2Bricklet::DEVICE_IDENTIFIER => {
                                 info!("Found Motion detector Bricklet: {}", paket.uid);
+                                register_handle(
+                                    &mut running_threads,
+                                    uid,
+                                    handle_motion_detector(
+                                        MotionDetectorV2Bricklet::new(uid, ipcon.clone()),
+                                        event_registry.clone(),
+                                        SingleButtonKey::SingleButton,
+                                    ),
+                                )
+                                .await;
+                            }
+                            TemperatureV2Bricklet::DEVICE_IDENTIFIER => {
+                                info!("Found Temperature Bricklet: {}", paket.uid);
                             }
 
                             _ => {}
@@ -275,6 +293,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
         event_registry.clone(),
         DualButtonKey::DualButton,
         BrightnessKey::IlluminationBrightness,
+        Duration::from_secs(2 * 3600),
+        None,
     )
     .await;
     for endpoint in tinkerforge.endpoints() {

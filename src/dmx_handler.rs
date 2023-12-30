@@ -11,7 +11,7 @@ use tokio::sync::{mpsc, mpsc::Sender};
 use tokio_stream::{wrappers::ReceiverStream, Stream, StreamExt};
 use tokio_util::either::Either;
 
-use crate::registry::{BrightnessKey, EventRegistry, LightColorKey};
+use crate::registry::{BrightnessKey, EventRegistry, LightColorKey, SwitchOutputKey};
 
 pub async fn handle_dmx(
     bricklet: DmxBricklet,
@@ -22,12 +22,18 @@ pub async fn handle_dmx(
     let mut streams = SelectAll::new();
     for config_entry in config.iter().cloned() {
         streams.push(match config_entry {
-            DmxConfigEntry::Dimm { register, channel } => Either::Left(
+            DmxConfigEntry::Dimm { register, channel } => Either::Left(Either::Left(
                 event_registry
                     .brightness_stream(register)
                     .await
                     .map(move |v| DmxCommand::single(channel, v.0)),
-            ),
+            )),
+            DmxConfigEntry::Switch { register, channel } => Either::Left(Either::Right(
+                event_registry
+                    .switch_stream(register)
+                    .await
+                    .map(move |v| DmxCommand::single(channel, if v { 255 } else { 0 })),
+            )),
             DmxConfigEntry::DimmWhitebalance {
                 brightness_register,
                 whitebalance_register,
@@ -104,6 +110,10 @@ pub enum DmxConfigEntry {
         cold_channel: u16,
         warm_mireds: u16,
         cold_mireds: u16,
+    },
+    Switch {
+        register: SwitchOutputKey,
+        channel: u16,
     },
 }
 

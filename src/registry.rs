@@ -41,6 +41,9 @@ pub enum BrightnessKey {
 }
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
+pub struct SwitchOutputKey;
+
+#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
 pub enum DualButtonKey {
     DualButton,
 }
@@ -60,6 +63,8 @@ pub enum DualButtonLayout {
     UP,
     DOWN,
 }
+#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Default)]
+pub struct SingleButtonLayout;
 pub trait KeyAccess<K: TypedKey<Value = V>, V: Clone + Sync + Send + 'static> {
     async fn register_access<
         'a,
@@ -108,6 +113,8 @@ struct InnerEventRegistry {
     light_color_registers: HashMap<LightColorKey, Register<Saturating<u16>>>,
     brightness_color: HashMap<BrightnessKey, Register<Saturating<u8>>>,
     dual_buttons: HashMap<DualButtonKey, Register<ButtonState<DualButtonLayout>>>,
+    buttons: HashMap<SingleButtonKey, Register<ButtonState<SingleButtonLayout>>>,
+    output_switch: HashMap<SwitchOutputKey, Register<bool>>,
 }
 
 impl InnerEventRegistry {
@@ -131,6 +138,16 @@ impl InnerEventRegistry {
         key: DualButtonKey,
     ) -> &mut Register<ButtonState<DualButtonLayout>> {
         self.dual_buttons.entry(key).or_default()
+    }
+    fn button_register(
+        &mut self,
+        key: SingleButtonKey,
+    ) -> &mut Register<ButtonState<SingleButtonLayout>> {
+        self.buttons.entry(key).or_default()
+    }
+
+    fn switch_register(&mut self, key: SwitchOutputKey) -> &mut Register<bool> {
+        self.output_switch.entry(key).or_default()
     }
     fn clock(&mut self, clock_key: ClockKey) -> &mut Register<DateTime<Local>> {
         self.clock_registers
@@ -260,6 +277,46 @@ impl EventRegistry {
             .dual_button_register(dual_button_key)
             .sender()
     }
+    pub async fn single_button_stream(
+        &self,
+        single_button_key: SingleButtonKey,
+    ) -> impl Stream<Item = ButtonState<SingleButtonLayout>> {
+        self.inner
+            .lock()
+            .await
+            .deref_mut()
+            .button_register(single_button_key)
+            .stream()
+            .await
+    }
+    pub async fn single_button_sender(
+        &self,
+        single_button_key: SingleButtonKey,
+    ) -> Sender<ButtonState<SingleButtonLayout>> {
+        self.inner
+            .lock()
+            .await
+            .button_register(single_button_key)
+            .sender()
+    }
+    pub async fn switch_stream(
+        &self,
+        switch_output_key: SwitchOutputKey,
+    ) -> impl Stream<Item = bool> {
+        self.inner
+            .lock()
+            .await
+            .switch_register(switch_output_key)
+            .stream()
+            .await
+    }
+    pub async fn switch_sender(&self, switch_output_key: SwitchOutputKey) -> Sender<bool> {
+        self.inner
+            .lock()
+            .await
+            .switch_register(switch_output_key)
+            .sender()
+    }
 }
 
 impl InnerEventRegistry {
@@ -270,6 +327,8 @@ impl InnerEventRegistry {
             light_color_registers: Default::default(),
             brightness_color: Default::default(),
             dual_buttons: Default::default(),
+            buttons: Default::default(),
+            output_switch: Default::default(),
         }
     }
 }
