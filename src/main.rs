@@ -18,10 +18,12 @@ use tinkerforge_async::{
 use tokio::{join, net::ToSocketAddrs, pin, sync::mpsc, task, task::JoinHandle, time::sleep};
 use tokio_stream::StreamExt;
 
+use crate::dmx_handler::{handle_dmx, DmxConfigEntry};
 use crate::io_handler::DualButtonSettings;
 use crate::light_controller::dual_input_dimmer;
 use crate::registry::{BrightnessKey, ClockKey, DualButtonKey, LightColorKey, TemperatureKey};
 use crate::screen_data_renderer::ScreenSettings;
+use crate::util::kelvin_2_mireds;
 use crate::{
     display::Orientation, io_handler::handle_io16_v2, registry::EventRegistry,
     screen_data_renderer::start_screen_thread, settings::CONFIG,
@@ -31,6 +33,7 @@ mod register;
 
 mod display;
 
+mod dmx_handler;
 mod icons;
 mod io_handler;
 mod light_controller;
@@ -135,6 +138,32 @@ async fn run_enumeration_listener<T: ToSocketAddrs>(
                             }
                             DmxBricklet::DEVICE_IDENTIFIER => {
                                 info!("Found DMX Bricklet: {}", paket.uid);
+                                register_handle(
+                                    &mut running_threads,
+                                    uid,
+                                    handle_dmx(
+                                        DmxBricklet::new(uid, ipcon.clone()),
+                                        event_registry.clone(),
+                                        &[
+                                            DmxConfigEntry::Dimm {
+                                                register: BrightnessKey::IlluminationBrightness,
+                                                channel: 2,
+                                            },
+                                            DmxConfigEntry::DimmWhitebalance {
+                                                brightness_register:
+                                                    BrightnessKey::IlluminationBrightness,
+                                                whitebalance_register:
+                                                    LightColorKey::IlluminationColor,
+                                                warm_channel: 0,
+                                                cold_channel: 1,
+                                                warm_mireds: kelvin_2_mireds(2700),
+                                                cold_mireds: kelvin_2_mireds(7500),
+                                            },
+                                        ],
+                                    )
+                                    .await,
+                                )
+                                .await;
                             }
                             Io16V2Bricklet::DEVICE_IDENTIFIER => {
                                 info!("Found IO 16 Bricklet: {}", paket.uid);

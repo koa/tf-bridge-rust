@@ -2,7 +2,6 @@ use std::hash::Hash;
 use std::num::Saturating;
 use std::{collections::HashMap, future::Future, ops::DerefMut, sync::Arc, time::Duration};
 
-use async_trait::async_trait;
 use chrono::{DateTime, Local, Timelike};
 use log::error;
 use tokio::{sync::mpsc::Sender, sync::Mutex, time::sleep};
@@ -61,7 +60,6 @@ pub enum DualButtonLayout {
     UP,
     DOWN,
 }
-#[async_trait]
 pub trait KeyAccess<K: TypedKey<Value = V>, V: Clone + Sync + Send + 'static> {
     async fn register_access<
         'a,

@@ -1,13 +1,12 @@
-use std::hash::Hash;
-use std::num::Saturating;
+use std::{hash::Hash, num::Saturating};
 
 use log::error;
-use tokio::sync::mpsc;
-use tokio::sync::mpsc::error::SendError;
-use tokio::task::{AbortHandle, JoinHandle};
-use tokio::time::sleep;
-use tokio_stream::wrappers::ReceiverStream;
-use tokio_stream::StreamExt;
+use tokio::{
+    sync::mpsc::{self, error::SendError},
+    task::{AbortHandle, JoinHandle},
+    time::sleep,
+};
+use tokio_stream::{wrappers::ReceiverStream, StreamExt};
 
 use crate::registry::{BrightnessKey, ButtonState, DualButtonKey, DualButtonLayout, EventRegistry};
 

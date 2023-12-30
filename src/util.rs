@@ -12,3 +12,7 @@ pub async fn optional_stream<ISF: Future<Output = IS>, IS: Stream<Item = T>, T>(
         Either::Right(empty::<T>())
     }
 }
+
+pub fn kelvin_2_mireds(temp: u16) -> u16 {
+    (1000000 / temp as u32) as u16
+}
