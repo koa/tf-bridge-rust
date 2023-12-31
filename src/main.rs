@@ -6,7 +6,6 @@ use env_logger::{Env, TimestampPrecision};
 use log::{error, info};
 use prometheus::{gather, Encoder, TextEncoder};
 use thiserror::Error;
-use tinkerforge_async::temperature_v2_bricklet::TemperatureV2Bricklet;
 use tinkerforge_async::{
     base58::Base58,
     dmx_bricklet::DmxBricklet,
@@ -15,38 +14,35 @@ use tinkerforge_async::{
     ip_connection::{async_io::AsyncIpConnection, EnumerateResponse, EnumerationType},
     lcd_128x64_bricklet::Lcd128x64Bricklet,
     motion_detector_v2_bricklet::MotionDetectorV2Bricklet,
+    temperature_v2_bricklet::TemperatureV2Bricklet,
 };
 use tokio::{join, net::ToSocketAddrs, pin, sync::mpsc, task, task::JoinHandle, time::sleep};
 use tokio_stream::StreamExt;
 
-use crate::dmx_handler::{handle_dmx, DmxConfigEntry};
-use crate::io_handler::DualButtonSettings;
-use crate::light_controller::dual_input_dimmer;
-use crate::motion_detector::handle_motion_detector;
-use crate::registry::{
-    BrightnessKey, ClockKey, DualButtonKey, LightColorKey, SingleButtonKey, TemperatureKey,
-};
-use crate::screen_data_renderer::ScreenSettings;
-use crate::temperature::handle_temperature;
-use crate::util::kelvin_2_mireds;
 use crate::{
-    display::Orientation, io_handler::handle_io16_v2, registry::EventRegistry,
-    screen_data_renderer::start_screen_thread, settings::CONFIG,
+    controller::light::dual_input_dimmer,
+    data::{
+        registry::{
+            BrightnessKey, ClockKey, DualButtonKey, EventRegistry, LightColorKey, SingleButtonKey,
+            TemperatureKey,
+        },
+        settings::CONFIG,
+    },
+    devices::{
+        display::Orientation,
+        dmx_handler::{handle_dmx, DmxConfigEntry},
+        io_handler::{handle_io16_v2, DualButtonSettings},
+        motion_detector::handle_motion_detector,
+        screen_data_renderer::{start_screen_thread, ScreenSettings},
+        temperature::handle_temperature,
+    },
+    util::kelvin_2_mireds,
 };
 
-mod register;
-
-mod display;
-
-mod dmx_handler;
+mod controller;
+mod data;
+mod devices;
 mod icons;
-mod io_handler;
-mod light_controller;
-mod motion_detector;
-mod registry;
-mod screen_data_renderer;
-mod settings;
-mod temperature;
 mod util;
 
 fn print_enumerate_response(response: &EnumerateResponse) {

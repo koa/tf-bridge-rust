@@ -2,12 +2,11 @@ use std::hash::Hash;
 use std::num::Saturating;
 use std::{collections::HashMap, future::Future, ops::DerefMut, sync::Arc, time::Duration};
 
+use crate::data::register::Register;
 use chrono::{DateTime, Local, Timelike};
 use log::error;
 use tokio::{sync::mpsc::Sender, sync::Mutex, time::sleep};
 use tokio_stream::Stream;
-
-use crate::register::Register;
 
 pub trait TypedKey {
     type Value;

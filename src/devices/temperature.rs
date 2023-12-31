@@ -1,13 +1,9 @@
+use crate::data::registry::{EventRegistry, TemperatureKey};
 use log::error;
 use thiserror::Error;
-use tinkerforge_async::error::TinkerforgeError;
-use tinkerforge_async::temperature_v2_bricklet::TemperatureV2Bricklet;
+use tinkerforge_async::{error::TinkerforgeError, temperature_v2_bricklet::TemperatureV2Bricklet};
 use tokio::sync::mpsc;
-use tokio::sync::mpsc::Receiver;
-use tokio_stream::wrappers::ReceiverStream;
-use tokio_stream::StreamExt;
-
-use crate::registry::{EventRegistry, TemperatureKey};
+use tokio_stream::{wrappers::ReceiverStream, StreamExt};
 
 pub fn handle_temperature(
     bricklet: TemperatureV2Bricklet,
@@ -38,7 +34,7 @@ async fn temperature_task(
     mut bricklet: TemperatureV2Bricklet,
     event_registry: EventRegistry,
     temperature_key: TemperatureKey,
-    termination_receiver: Receiver<()>,
+    termination_receiver: mpsc::Receiver<()>,
 ) -> Result<(), TemperatureError> {
     let mut stream = bricklet
         .get_temperature_callback_receiver()

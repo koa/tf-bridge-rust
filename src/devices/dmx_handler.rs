@@ -1,5 +1,6 @@
 use std::num::Saturating;
 
+use crate::data::registry::{BrightnessKey, EventRegistry, LightColorKey, SwitchOutputKey};
 use futures::stream::SelectAll;
 use log::{error, info};
 use sub_array::SubArray;
@@ -10,8 +11,6 @@ use tinkerforge_async::{
 use tokio::sync::{mpsc, mpsc::Sender};
 use tokio_stream::{wrappers::ReceiverStream, Stream, StreamExt};
 use tokio_util::either::Either;
-
-use crate::registry::{BrightnessKey, EventRegistry, LightColorKey, SwitchOutputKey};
 
 pub async fn handle_dmx(
     bricklet: DmxBricklet,

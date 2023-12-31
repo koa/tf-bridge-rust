@@ -1,14 +1,11 @@
 use core::option::Option;
 
+use crate::data::registry::{ButtonState, DualButtonKey, DualButtonLayout, EventRegistry};
 use log::{error, info};
 use thiserror::Error;
 use tinkerforge_async::{error::TinkerforgeError, io16_v2_bricklet::Io16V2Bricklet};
-use tokio::sync::mpsc;
-use tokio::task::JoinHandle;
-use tokio::time::sleep;
+use tokio::{sync::mpsc, task::JoinHandle, time::sleep};
 use tokio_stream::{wrappers::ReceiverStream, StreamExt};
-
-use crate::registry::{ButtonState, DualButtonKey, DualButtonLayout, EventRegistry};
 
 pub async fn handle_io16_v2(
     bricklet: Io16V2Bricklet,

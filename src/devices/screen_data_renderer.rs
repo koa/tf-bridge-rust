@@ -15,6 +15,7 @@ use embedded_graphics::{
     primitives::Rectangle,
     text::Text,
 };
+use futures::SinkExt;
 use log::{error, info};
 use simple_layout::prelude::{
     bordered, center, expand, horizontal_layout, optional_placement, owned_text, padding, scale,
@@ -35,10 +36,9 @@ use tokio_stream::{empty, wrappers::ReceiverStream, StreamExt, StreamNotifyClose
 use tokio_util::either::Either;
 
 use crate::{
-    display::{Lcd128x64BrickletDisplay, Orientation},
-    icons,
-    registry::{BrightnessKey, ClockKey, EventRegistry, LightColorKey, TemperatureKey},
-    util,
+    data::registry::{BrightnessKey, ClockKey, EventRegistry, LightColorKey, TemperatureKey},
+    devices::display::{Lcd128x64BrickletDisplay, Orientation},
+    icons, util,
 };
 
 const TEXT_STYLE: MonoTextStyle<BinaryColor> = MonoTextStyle::new(&FONT_6X12, BinaryColor::On);

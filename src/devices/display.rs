@@ -8,7 +8,6 @@ use strum_macros::EnumIter;
 use sub_array::SubArray;
 use tinkerforge_async::{
     error::TinkerforgeError,
-    ip_connection::async_io::AsyncIpConnection,
     lcd_128x64_bricklet::{
         Lcd128x64Bricklet, TouchPositionEvent, LCD_128X64_BRICKLET_STATUS_LED_CONFIG_OFF,
         LCD_128X64_BRICKLET_TOUCH_LED_CONFIG_OFF, LCD_128X64_BRICKLET_TOUCH_LED_CONFIG_ON,

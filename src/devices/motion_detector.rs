@@ -1,12 +1,11 @@
+use crate::data::registry::{ButtonState, EventRegistry, SingleButtonKey, SingleButtonLayout};
 use log::error;
 use thiserror::Error;
-use tinkerforge_async::error::TinkerforgeError;
-use tinkerforge_async::motion_detector_v2_bricklet::MotionDetectorV2Bricklet;
+use tinkerforge_async::{
+    error::TinkerforgeError, motion_detector_v2_bricklet::MotionDetectorV2Bricklet,
+};
 use tokio::sync::mpsc;
-use tokio_stream::wrappers::ReceiverStream;
-use tokio_stream::StreamExt;
-
-use crate::registry::{ButtonState, EventRegistry, SingleButtonKey, SingleButtonLayout};
+use tokio_stream::{wrappers::ReceiverStream, StreamExt};
 
 pub fn handle_motion_detector(
     bricklet: MotionDetectorV2Bricklet,

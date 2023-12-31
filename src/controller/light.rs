@@ -10,7 +10,7 @@ use tokio::{
 };
 use tokio_stream::{wrappers::ReceiverStream, StreamExt};
 
-use crate::registry::{
+use crate::data::registry::{
     BrightnessKey, ButtonState, DualButtonKey, DualButtonLayout, EventRegistry, SingleButtonKey,
     SwitchOutputKey,
 };
