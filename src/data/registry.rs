@@ -3,6 +3,7 @@ use std::num::Saturating;
 use std::{collections::HashMap, future::Future, ops::DerefMut, sync::Arc, time::Duration};
 
 use crate::data::register::Register;
+use crate::data::{DeviceInRoom, Room, SubDeviceInRoom};
 use chrono::{DateTime, Local, Timelike};
 use log::error;
 use tokio::{sync::mpsc::Sender, sync::Mutex, time::sleep};
@@ -32,23 +33,27 @@ impl TypedKey for TemperatureKey {
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
 pub enum LightColorKey {
-    IlluminationColor,
+    Light(DeviceInRoom),
 }
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
 pub enum BrightnessKey {
-    IlluminationBrightness,
+    Light(DeviceInRoom),
 }
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
-pub struct SwitchOutputKey;
+pub enum SwitchOutputKey {
+    Light(DeviceInRoom),
+    Heat(DeviceInRoom),
+    Bell(DeviceInRoom),
+}
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
 pub enum DualButtonKey {
-    DualButton,
+    DualButton(SubDeviceInRoom),
 }
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
 pub enum SingleButtonKey {
-    SingleButton,
+    SingleButton(SubDeviceInRoom),
 }
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Default, Debug)]
 pub enum ButtonState<B: Copy + Clone + Eq + Hash> {

@@ -19,6 +19,7 @@ use tinkerforge_async::{
 use tokio::{join, net::ToSocketAddrs, pin, sync::mpsc, task, task::JoinHandle, time::sleep};
 use tokio_stream::StreamExt;
 
+use crate::data::DeviceInRoom;
 use crate::{
     controller::light::dual_input_dimmer,
     data::{
@@ -129,10 +130,12 @@ async fn run_enumeration_listener<T: ToSocketAddrs>(
                                             adjust_temperature_key: Some(
                                                 TemperatureKey::TargetTemperature,
                                             ),
-                                            light_color_key: Some(LightColorKey::IlluminationColor),
-                                            brightness_key: Some(
-                                                BrightnessKey::IlluminationBrightness,
-                                            ),
+                                            light_color_key: Some(LightColorKey::Light(
+                                                DeviceInRoom::default(),
+                                            )),
+                                            brightness_key: Some(BrightnessKey::Light(
+                                                Default::default(),
+                                            )),
                                         },
                                     )
                                     .await,
@@ -149,14 +152,16 @@ async fn run_enumeration_listener<T: ToSocketAddrs>(
                                         event_registry.clone(),
                                         &[
                                             DmxConfigEntry::Dimm {
-                                                register: BrightnessKey::IlluminationBrightness,
+                                                register: BrightnessKey::Light(Default::default()),
                                                 channel: 2,
                                             },
                                             DmxConfigEntry::DimmWhitebalance {
-                                                brightness_register:
-                                                    BrightnessKey::IlluminationBrightness,
-                                                whitebalance_register:
-                                                    LightColorKey::IlluminationColor,
+                                                brightness_register: BrightnessKey::Light(
+                                                    Default::default(),
+                                                ),
+                                                whitebalance_register: LightColorKey::Light(
+                                                    Default::default(),
+                                                ),
                                                 warm_channel: 0,
                                                 cold_channel: 1,
                                                 warm_mireds: kelvin_2_mireds(2700),
@@ -179,7 +184,7 @@ async fn run_enumeration_listener<T: ToSocketAddrs>(
                                         &[DualButtonSettings {
                                             up_button: 7,
                                             down_button: 6,
-                                            output: DualButtonKey::DualButton,
+                                            output: DualButtonKey::DualButton(Default::default()),
                                         }],
                                     )
                                     .await,
@@ -194,7 +199,7 @@ async fn run_enumeration_listener<T: ToSocketAddrs>(
                                     handle_motion_detector(
                                         MotionDetectorV2Bricklet::new(uid, ipcon.clone()),
                                         event_registry.clone(),
-                                        SingleButtonKey::SingleButton,
+                                        SingleButtonKey::SingleButton(Default::default()),
                                     ),
                                 )
                                 .await;
@@ -290,7 +295,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let event_registry = EventRegistry::new();
     let mut debug_stream = event_registry
-        .dual_button_stream(DualButtonKey::DualButton)
+        .dual_button_stream(DualButtonKey::DualButton(Default::default()))
         .await;
     tokio::spawn(async move {
         while let Some(event) = debug_stream.next().await {
@@ -298,9 +303,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
     });
     dual_input_dimmer(
-        event_registry.clone(),
-        DualButtonKey::DualButton,
-        BrightnessKey::IlluminationBrightness,
+        &event_registry,
+        DualButtonKey::DualButton(Default::default()),
+        BrightnessKey::Light(Default::default()),
         Duration::from_secs(2 * 3600),
         None,
     )

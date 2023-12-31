@@ -307,10 +307,9 @@ impl Orientation {
 
 #[cfg(test)]
 mod test {
+    use crate::devices::display::Orientation;
     use embedded_graphics::prelude::Point;
     use strum::IntoEnumIterator;
-
-    use crate::display::Orientation;
 
     #[test]
     fn test_translate_and_reverse() {

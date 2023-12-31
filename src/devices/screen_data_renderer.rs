@@ -15,7 +15,6 @@ use embedded_graphics::{
     primitives::Rectangle,
     text::Text,
 };
-use futures::SinkExt;
 use log::{error, info};
 use simple_layout::prelude::{
     bordered, center, expand, horizontal_layout, optional_placement, owned_text, padding, scale,
@@ -419,7 +418,7 @@ async fn screen_thread_loop(
     } = settings;
     let mut display = Lcd128x64BrickletDisplay::new(bricklet, orientation).await?;
     display.set_backlight(0).await?;
-    let (rx, tx) = mpsc::channel(2);
+    let (tx, rx) = mpsc::channel(2);
 
     let er = event_registry.clone();
     let clock_stream_future = util::optional_stream(
@@ -492,7 +491,7 @@ async fn screen_thread_loop(
         .merge(adjust_temperature_stream)
         .merge(update_color_stream)
         .merge(update_brightness_stream)
-        .merge(ReceiverStream::new(tx))
+        .merge(ReceiverStream::new(rx))
         .merge(ReceiverStream::new(termination_receiver).map(|_| ScreenMessage::Closed));
 
     let mut dimm_timer_handle = None::<JoinHandle<()>>;
@@ -536,7 +535,7 @@ async fn screen_thread_loop(
                     }
                 };
                 display.set_backlight(100).await?;
-                let receiver = rx.clone();
+                let receiver = tx.clone();
                 if let Some(running) = dimm_timer_handle.replace(tokio::spawn(async move {
                     sleep(core::time::Duration::from_secs(10)).await;
                     if let Err(error) = receiver.send(ScreenMessage::Dimm).await {

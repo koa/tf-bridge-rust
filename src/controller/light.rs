@@ -1,35 +1,46 @@
-use std::time::Duration;
-use std::{hash::Hash, num::Saturating};
+use futures::SinkExt;
+use std::{hash::Hash, num::Saturating, time::Duration};
 
 use log::error;
-use tokio::sync::mpsc::Sender;
 use tokio::{
-    sync::mpsc::{self, error::SendError},
+    sync::mpsc::{self, error::SendError, Sender},
     task::{AbortHandle, JoinHandle},
     time::sleep,
 };
-use tokio_stream::{wrappers::ReceiverStream, StreamExt};
+use tokio_stream::{wrappers::ReceiverStream, Stream, StreamExt};
 
 use crate::data::registry::{
     BrightnessKey, ButtonState, DualButtonKey, DualButtonLayout, EventRegistry, SingleButtonKey,
-    SwitchOutputKey,
+    SingleButtonLayout, SwitchOutputKey,
 };
 use crate::util::optional_stream;
 
 pub async fn dual_input_dimmer(
-    event_registry: EventRegistry,
+    event_registry: &EventRegistry,
     input: DualButtonKey,
     output: BrightnessKey,
     auto_switch_off_time: Duration,
     presence: Option<SingleButtonKey>,
 ) -> AbortHandle {
+    let current_brightness = event_registry
+        .brightness_stream(output)
+        .await
+        .next()
+        .await
+        .unwrap_or_default();
+    let sender = event_registry.brightness_sender(output).await;
+
+    let input_stream = event_registry
+        .dual_button_stream(input)
+        .await
+        .map(DimmerEvent::ButtonState)
+        .merge(create_presence_stream(event_registry, presence).await);
     tokio::spawn(async move {
         if let Err(error) = dual_input_dimmer_task(
-            event_registry,
-            input,
-            output,
+            input_stream,
             auto_switch_off_time,
-            presence,
+            current_brightness,
+            sender,
         )
         .await
         {
@@ -39,27 +50,101 @@ pub async fn dual_input_dimmer(
     .abort_handle()
 }
 
+async fn create_presence_stream<L: Copy + Eq + Hash>(
+    event_registry: &EventRegistry,
+    presence_key: Option<SingleButtonKey>,
+) -> impl Stream<Item = DimmerEvent<L>> + Sized {
+    optional_stream(presence_key.map(|k| event_registry.single_button_stream(k)))
+        .await
+        .filter_map(|s| match s {
+            ButtonState::ShortPressStart(_) => Some(DimmerEvent::<L>::PresenceDetected),
+            _ => None,
+        })
+}
+
 pub async fn dual_input_switch(
-    event_registry: EventRegistry,
+    event_registry: &EventRegistry,
     input: DualButtonKey,
     output: SwitchOutputKey,
     auto_switch_off_time: Duration,
     presence: Option<SingleButtonKey>,
 ) -> AbortHandle {
-    tokio::spawn(async move {
-        if let Err(error) = dual_input_switch_task(
-            event_registry,
-            input,
-            output,
-            auto_switch_off_time,
-            presence,
-        )
+    let current_state = event_registry
+        .switch_stream(output)
         .await
+        .next()
+        .await
+        .unwrap_or_default();
+    let sender = event_registry.switch_sender(output).await;
+
+    let input_stream = event_registry
+        .dual_button_stream(input)
+        .await
+        .map(DimmerEvent::ButtonState)
+        .merge(create_presence_stream(event_registry, presence).await);
+
+    tokio::spawn(async move {
+        if let Err(error) =
+            dual_input_switch_task(auto_switch_off_time, current_state, sender, input_stream).await
         {
-            error!("Failed dual input dimmer: {error}")
+            error!("Failed dual input switch: {error}")
         }
     })
     .abort_handle()
+}
+
+pub async fn motion_detector(
+    event_registry: &EventRegistry,
+    input: SingleButtonKey,
+    output: SwitchOutputKey,
+    switch_off_time: Duration,
+) -> AbortHandle {
+    let sender = event_registry.switch_sender(output).await;
+    let input_stream =
+        create_presence_stream::<SingleButtonLayout>(event_registry, Some(input)).await;
+    tokio::spawn(async move {
+        if let Err(error) = motion_detector_task(switch_off_time, sender, input_stream).await {
+            error!("Failed motion detector: {error}")
+        }
+    })
+    .abort_handle()
+}
+
+async fn motion_detector_task(
+    auto_switch_off_time: Duration,
+    output_sender: Sender<bool>,
+    input_stream: impl Stream<Item = DimmerEvent<SingleButtonLayout>> + Sized + Unpin,
+) -> Result<(), SendError<bool>> {
+    let (tx, rx) = mpsc::channel(2);
+
+    let mut timer_handle = None::<JoinHandle<()>>;
+    output_sender.send(false).await?;
+    let mut input_stream = input_stream.merge(ReceiverStream::new(rx));
+    while let Some(event) = input_stream.next().await {
+        match event {
+            DimmerEvent::ButtonState(_) => {}
+            DimmerEvent::KeepPressing(_) => {}
+            DimmerEvent::AutoSwitchOff => {
+                output_sender.send(false).await?;
+            }
+            DimmerEvent::PresenceDetected => {
+                output_sender.send(true).await?;
+                let tx = tx.clone();
+                if let Some(handle) = timer_handle.replace(tokio::spawn(async move {
+                    loop {
+                        sleep(auto_switch_off_time).await;
+                        if let Err(error) = tx.send(DimmerEvent::AutoSwitchOff).await {
+                            error!("Error sending switchoff: {error}");
+                            break;
+                        }
+                    }
+                })) {
+                    handle.abort();
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 enum DimmerEvent<L: Copy + Eq + Hash> {
@@ -70,41 +155,19 @@ enum DimmerEvent<L: Copy + Eq + Hash> {
 }
 
 async fn dual_input_dimmer_task(
-    event_registry: EventRegistry,
-    input: DualButtonKey,
-    output: BrightnessKey,
+    input_stream: impl Stream<Item = DimmerEvent<DualButtonLayout>> + Unpin,
     auto_switch_off_time: Duration,
-    presence: Option<SingleButtonKey>,
+    mut current_brightness: Saturating<u8>,
+    sender: Sender<Saturating<u8>>,
 ) -> Result<(), SendError<Saturating<u8>>> {
-    let mut current_brightness = event_registry
-        .brightness_stream(output)
-        .await
-        .next()
-        .await
-        .unwrap_or_default();
-    let mut last_on_brightness = current_brightness;
-    let sender = event_registry.brightness_sender(output).await;
     let (tx, rx) = mpsc::channel(2);
 
-    let presence_stream = optional_stream(presence.map(|k| event_registry.single_button_stream(k)))
-        .await
-        .filter_map(|s| match s {
-            ButtonState::ShortPressStart(_) => {
-                Some(DimmerEvent::<DualButtonLayout>::PresenceDetected)
-            }
-            _ => None,
-        });
-    let mut input_stream = event_registry
-        .dual_button_stream(input)
-        .await
-        .map(DimmerEvent::ButtonState)
-        .merge(presence_stream)
-        .merge(ReceiverStream::new(rx));
-
+    let mut last_on_brightness = current_brightness;
     let mut is_long_press = false;
     let mut last_button = DualButtonLayout::UP;
     let mut dimm_timer_handle = None::<JoinHandle<()>>;
 
+    let mut input_stream = input_stream.merge(ReceiverStream::new(rx));
     while let Some(event) = input_stream.next().await {
         match event {
             DimmerEvent::ButtonState(ButtonState::Released) => {
@@ -176,36 +239,15 @@ async fn dual_input_dimmer_task(
     }
     Ok(())
 }
-async fn dual_input_switch_task(
-    event_registry: EventRegistry,
-    input: DualButtonKey,
-    output: SwitchOutputKey,
-    auto_switch_off_time: Duration,
-    presence: Option<SingleButtonKey>,
-) -> Result<(), SendError<bool>> {
-    let mut current_state = event_registry
-        .switch_stream(output)
-        .await
-        .next()
-        .await
-        .unwrap_or_default();
-    let sender = event_registry.switch_sender(output).await;
-    let (tx, rx) = mpsc::channel(2);
 
-    let presence_stream = optional_stream(presence.map(|k| event_registry.single_button_stream(k)))
-        .await
-        .filter_map(|s| match s {
-            ButtonState::ShortPressStart(_) => {
-                Some(DimmerEvent::<DualButtonLayout>::PresenceDetected)
-            }
-            _ => None,
-        });
-    let mut input_stream = event_registry
-        .dual_button_stream(input)
-        .await
-        .map(DimmerEvent::ButtonState)
-        .merge(presence_stream)
-        .merge(ReceiverStream::new(rx));
+async fn dual_input_switch_task(
+    auto_switch_off_time: Duration,
+    mut current_state: bool,
+    sender: Sender<bool>,
+    input_stream: impl Stream<Item = DimmerEvent<DualButtonLayout>> + Sized + Unpin,
+) -> Result<(), SendError<bool>> {
+    let (tx, rx) = mpsc::channel(2);
+    let mut input_stream = input_stream.merge(ReceiverStream::new(rx));
 
     let mut switch_timer_handle = None::<JoinHandle<()>>;
 
