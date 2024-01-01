@@ -1,37 +1,47 @@
 use core::option::Option;
 
-use crate::data::registry::{ButtonState, DualButtonKey, DualButtonLayout, EventRegistry};
 use log::{error, info};
 use thiserror::Error;
 use tinkerforge_async::{error::TinkerforgeError, io16_v2_bricklet::Io16V2Bricklet};
 use tokio::{sync::mpsc, task::JoinHandle, time::sleep};
 use tokio_stream::{wrappers::ReceiverStream, StreamExt};
 
+use crate::data::registry::{ButtonState, DualButtonLayout, EventRegistry};
+use crate::data::wiring::ButtonSetting;
+
 pub async fn handle_io16_v2(
     bricklet: Io16V2Bricklet,
     event_registry: EventRegistry,
-    dual_buttons: &[DualButtonSettings],
+    buttons: &[ButtonSetting],
 ) -> mpsc::Sender<()> {
     let (tx, rx) = mpsc::channel(1);
-    let mut button_settings = <[ButtonSetting; 16]>::default();
-    for setting in dual_buttons {
-        if let Some(b) = button_settings.get_mut(setting.up_button as usize) {
-            *b = ButtonSetting::DualButtonUp(
-                event_registry.dual_button_sender(setting.output).await,
-            );
-        } else {
-            error!("On Button out of range: {}", setting.up_button);
-        }
-        if let Some(b) = button_settings.get_mut(setting.down_button as usize) {
-            *b = ButtonSetting::DualButtonDown(
-                event_registry.dual_button_sender(setting.output).await,
-            );
-        } else {
-            error!("Off Button out of range: {}", setting.up_button);
+    let mut channel_settings = <[ChannelSetting; 16]>::default();
+    for setting in buttons {
+        match setting {
+            ButtonSetting::Dual {
+                up_button,
+                down_button,
+                output,
+            } => {
+                if let Some(b) = channel_settings.get_mut(*up_button as usize) {
+                    *b = ChannelSetting::DualButtonUp(
+                        event_registry.dual_button_sender(*output).await,
+                    );
+                } else {
+                    error!("On Button out of range: {}", up_button);
+                }
+                if let Some(b) = channel_settings.get_mut(*down_button as usize) {
+                    *b = ChannelSetting::DualButtonDown(
+                        event_registry.dual_button_sender(*output).await,
+                    );
+                } else {
+                    error!("Off Button out of range: {}", up_button);
+                }
+            }
         }
     }
     tokio::spawn(async move {
-        match io_16_v2_loop(bricklet, rx, button_settings).await {
+        match io_16_v2_loop(bricklet, rx, channel_settings).await {
             Err(error) => {
                 error!("Cannot communicate with Io16V2Bricklet: {error}");
             }
@@ -43,11 +53,6 @@ pub async fn handle_io16_v2(
     tx
 }
 
-pub struct DualButtonSettings {
-    pub up_button: u8,
-    pub down_button: u8,
-    pub output: DualButtonKey,
-}
 #[derive(Debug)]
 enum IoMessage {
     Close,
@@ -57,7 +62,7 @@ enum IoMessage {
     Noop,
 }
 #[derive(Clone, Default)]
-enum ButtonSetting {
+enum ChannelSetting {
     #[default]
     None,
     DualButtonUp(mpsc::Sender<ButtonState<DualButtonLayout>>),
@@ -67,7 +72,7 @@ enum ButtonSetting {
 async fn io_16_v2_loop(
     mut bricklet: Io16V2Bricklet,
     termination_receiver: mpsc::Receiver<()>,
-    button_settings: [ButtonSetting; 16],
+    channel_settings: [ChannelSetting; 16],
 ) -> Result<(), IoHandlerError> {
     let (rx, tx) = mpsc::channel(2);
     let mut channel_timer: [Option<JoinHandle<()>>; 16] = <[Option<JoinHandle<()>>; 16]>::default();
@@ -89,17 +94,17 @@ async fn io_16_v2_loop(
         match message {
             IoMessage::Close => break,
             IoMessage::Press(channel) => {
-                match button_settings.get(channel as usize) {
+                match channel_settings.get(channel as usize) {
                     None => {}
-                    Some(ButtonSetting::DualButtonDown(sender)) => sender
+                    Some(ChannelSetting::DualButtonDown(sender)) => sender
                         .send(ButtonState::ShortPressStart(DualButtonLayout::DOWN))
                         .await
                         .map_err(IoHandlerError::DualButtonDown)?,
-                    Some(ButtonSetting::DualButtonUp(sender)) => sender
+                    Some(ChannelSetting::DualButtonUp(sender)) => sender
                         .send(ButtonState::ShortPressStart(DualButtonLayout::UP))
                         .await
                         .map_err(IoHandlerError::DualButtonUp)?,
-                    Some(ButtonSetting::None) => {}
+                    Some(ChannelSetting::None) => {}
                 }
 
                 let rx = rx.clone();
@@ -119,17 +124,17 @@ async fn io_16_v2_loop(
                 }
             }
             IoMessage::LongPress(channel) => {
-                match button_settings.get(channel as usize) {
+                match channel_settings.get(channel as usize) {
                     None => {}
-                    Some(ButtonSetting::DualButtonDown(sender)) => sender
+                    Some(ChannelSetting::DualButtonDown(sender)) => sender
                         .send(ButtonState::LongPressStart(DualButtonLayout::DOWN))
                         .await
                         .map_err(IoHandlerError::DualButtonDown)?,
-                    Some(ButtonSetting::DualButtonUp(sender)) => sender
+                    Some(ChannelSetting::DualButtonUp(sender)) => sender
                         .send(ButtonState::LongPressStart(DualButtonLayout::UP))
                         .await
                         .map_err(IoHandlerError::DualButtonUp)?,
-                    Some(ButtonSetting::None) => {}
+                    Some(ChannelSetting::None) => {}
                 }
                 let rx = rx.clone();
                 if let Some(running) =
@@ -148,17 +153,17 @@ async fn io_16_v2_loop(
                 }
             }
             IoMessage::Release(channel) => {
-                match button_settings.get(channel as usize) {
+                match channel_settings.get(channel as usize) {
                     None => {}
-                    Some(ButtonSetting::DualButtonDown(sender)) => sender
+                    Some(ChannelSetting::DualButtonDown(sender)) => sender
                         .send(ButtonState::Released)
                         .await
                         .map_err(IoHandlerError::DualButtonRelease)?,
-                    Some(ButtonSetting::DualButtonUp(sender)) => sender
+                    Some(ChannelSetting::DualButtonUp(sender)) => sender
                         .send(ButtonState::Released)
                         .await
                         .map_err(IoHandlerError::DualButtonRelease)?,
-                    Some(ButtonSetting::None) => {}
+                    Some(ChannelSetting::None) => {}
                 }
                 if let Some(timer) = channel_timer
                     .get_mut(channel as usize)

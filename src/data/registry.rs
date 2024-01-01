@@ -1,19 +1,21 @@
-use std::hash::Hash;
-use std::num::Saturating;
-use std::{collections::HashMap, future::Future, ops::DerefMut, sync::Arc, time::Duration};
+use std::{
+    collections::HashMap, future::Future, hash::Hash, num::Saturating, ops::DerefMut, sync::Arc,
+    time::Duration,
+};
 
-use crate::data::register::Register;
-use crate::data::{DeviceInRoom, Room, SubDeviceInRoom};
 use chrono::{DateTime, Local, Timelike};
 use log::error;
+use serde::{Deserialize, Serialize};
 use tokio::{sync::mpsc::Sender, sync::Mutex, time::sleep};
 use tokio_stream::Stream;
+
+use crate::data::{register::Register, DeviceInRoom, SubDeviceInRoom};
 
 pub trait TypedKey {
     type Value;
 }
 
-#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
+#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Serialize, Deserialize)]
 pub enum ClockKey {
     MinuteClock,
     SecondClock,
@@ -22,7 +24,7 @@ impl TypedKey for ClockKey {
     type Value = DateTime<Local>;
 }
 
-#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
+#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Serialize, Deserialize)]
 pub enum TemperatureKey {
     CurrentTemperature,
     TargetTemperature,
@@ -31,27 +33,27 @@ impl TypedKey for TemperatureKey {
     type Value = f32;
 }
 
-#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
+#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Serialize, Deserialize)]
 pub enum LightColorKey {
     Light(DeviceInRoom),
 }
-#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
+#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Serialize, Deserialize)]
 pub enum BrightnessKey {
     Light(DeviceInRoom),
 }
 
-#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
+#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Serialize, Deserialize)]
 pub enum SwitchOutputKey {
     Light(DeviceInRoom),
     Heat(DeviceInRoom),
     Bell(DeviceInRoom),
 }
 
-#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
+#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Serialize, Deserialize)]
 pub enum DualButtonKey {
     DualButton(SubDeviceInRoom),
 }
-#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
+#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Serialize, Deserialize)]
 pub enum SingleButtonKey {
     SingleButton(SubDeviceInRoom),
 }

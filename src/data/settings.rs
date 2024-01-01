@@ -1,8 +1,14 @@
+use std::io;
 use std::net::{IpAddr, Ipv6Addr};
 
 use config::{Config, ConfigError, Environment, File};
+use google_sheets4::oauth2::{
+    parse_service_account_key, read_service_account_key, ServiceAccountKey,
+};
 use lazy_static::lazy_static;
+use log::warn;
 use serde::Deserialize;
+use thiserror::Error;
 
 #[derive(Deserialize, Debug)]
 pub struct ServerSettings {
@@ -36,11 +42,50 @@ impl TinkerforgeEndpoint {
         self.port.unwrap_or(4223)
     }
 }
+#[derive(Deserialize, Debug)]
+pub struct GoogleSheet {
+    key_file: Option<String>,
+    key_data: Option<String>,
+    spreadsheet_id: String,
+}
+#[derive(Error, Debug)]
+pub enum GoogleError {
+    #[error("IO Error {0}")]
+    Io(#[from] io::Error),
+    #[error("error access configuration: {description}")]
+    ConfigContent { description: &'static str },
+}
+
+impl GoogleSheet {
+    pub async fn read_secret(&self) -> Result<ServiceAccountKey, GoogleError> {
+        if let Some(filename) = &self.key_file {
+            let result = read_service_account_key(filename).await;
+            match result {
+                Ok(key) => Ok(key),
+                Err(error) => {
+                    warn!("Cannot load file {filename}: {error}");
+                    Err(error.into())
+                }
+            }
+        } else if let Some(data) = &self.key_data {
+            Ok(parse_service_account_key(data)?)
+        } else {
+            Err(GoogleError::ConfigContent {
+                description: "neither key_file nor key_data filled in",
+            })
+        }
+    }
+
+    pub fn spreadsheet_id(&self) -> &str {
+        &self.spreadsheet_id
+    }
+}
 
 #[derive(Debug)]
 pub struct Settings {
     pub server: ServerSettings,
     pub tinkerforge: Tinkerforge,
+    pub google_sheet: GoogleSheet,
 }
 
 const DEFAULT_IP_ADDRESS: IpAddr = IpAddr::V6(Ipv6Addr::UNSPECIFIED);
@@ -67,6 +112,7 @@ fn create_settings() -> Result<Settings, ConfigError> {
     Ok(Settings {
         server: cfg.get("server")?,
         tinkerforge: cfg.get("tinkerforge")?,
+        google_sheet: cfg.get("google-sheet")?,
     })
 }
 

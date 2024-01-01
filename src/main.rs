@@ -19,7 +19,9 @@ use tinkerforge_async::{
 use tokio::{join, net::ToSocketAddrs, pin, sync::mpsc, task, task::JoinHandle, time::sleep};
 use tokio_stream::StreamExt;
 
-use crate::data::DeviceInRoom;
+use crate::data::wiring::{
+    ButtonSetting, Controllers, DmxSettings, DualInputDimmer, TinkerforgeDevices, Wiring,
+};
 use crate::{
     controller::light::dual_input_dimmer,
     data::{
@@ -28,13 +30,12 @@ use crate::{
             TemperatureKey,
         },
         settings::CONFIG,
+        wiring::{DmxConfigEntry, Orientation, ScreenSettings},
+        DeviceInRoom,
     },
     devices::{
-        display::Orientation,
-        dmx_handler::{handle_dmx, DmxConfigEntry},
-        io_handler::{handle_io16_v2, DualButtonSettings},
-        motion_detector::handle_motion_detector,
-        screen_data_renderer::{start_screen_thread, ScreenSettings},
+        dmx_handler::handle_dmx, io_handler::handle_io16_v2,
+        motion_detector::handle_motion_detector, screen_data_renderer::start_screen_thread,
         temperature::handle_temperature,
     },
     util::kelvin_2_mireds,
@@ -181,7 +182,7 @@ async fn run_enumeration_listener<T: ToSocketAddrs>(
                                     handle_io16_v2(
                                         Io16V2Bricklet::new(uid, ipcon.clone()),
                                         event_registry.clone(),
-                                        &[DualButtonSettings {
+                                        &[ButtonSetting::Dual {
                                             up_button: 7,
                                             down_button: 6,
                                             output: DualButtonKey::DualButton(Default::default()),
@@ -294,6 +295,57 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .run();
 
     let event_registry = EventRegistry::new();
+
+    let wiring = Wiring {
+        controllers: Controllers {
+            dual_input_dimmers: Box::new([DualInputDimmer {
+                input: DualButtonKey::DualButton(Default::default()),
+                output: BrightnessKey::Light(Default::default()),
+                auto_switch_off_time: Duration::from_secs(2 * 3600),
+                presence: None,
+            }]),
+            dual_input_switches: Box::new([]),
+            motion_detectors: Box::new([]),
+        },
+        tinkerforge_devices: TinkerforgeDevices {
+            lcd_screens: Default::default(),
+            dmx_bricklets: HashMap::from([(
+                "EHc".parse().unwrap(),
+                DmxSettings {
+                    entries: Box::new([
+                        DmxConfigEntry::Dimm {
+                            register: BrightnessKey::Light(DeviceInRoom {
+                                room: "1.4".parse().unwrap(),
+                                idx: 0,
+                            }),
+                            channel: 3,
+                        },
+                        DmxConfigEntry::DimmWhitebalance {
+                            brightness_register: BrightnessKey::Light(DeviceInRoom {
+                                room: "1.4".parse().unwrap(),
+                                idx: 0,
+                            }),
+                            whitebalance_register: LightColorKey::Light(DeviceInRoom {
+                                room: "1.4".parse().unwrap(),
+                                idx: 0,
+                            }),
+                            warm_channel: 2,
+                            cold_channel: 3,
+                            warm_mireds: kelvin_2_mireds(2700),
+                            cold_mireds: kelvin_2_mireds(7500),
+                        },
+                    ]),
+                },
+            )]),
+            io_bricklets: Default::default(),
+            motion_detectors: Default::default(),
+            relays: Default::default(),
+            temperature_sensors: Default::default(),
+        },
+    };
+
+    info!("Config: \n{}", serde_yaml::to_string(&wiring).unwrap());
+
     let mut debug_stream = event_registry
         .dual_button_stream(DualButtonKey::DualButton(Default::default()))
         .await;
@@ -302,14 +354,18 @@ async fn main() -> Result<(), Box<dyn Error>> {
             info!("Event: {event:?}")
         }
     });
-    dual_input_dimmer(
-        &event_registry,
-        DualButtonKey::DualButton(Default::default()),
-        BrightnessKey::Light(Default::default()),
-        Duration::from_secs(2 * 3600),
-        None,
-    )
-    .await;
+
+    for dimmer_cfg in wiring.controllers.dual_input_dimmers.iter() {
+        dual_input_dimmer(
+            &event_registry,
+            dimmer_cfg.input,
+            dimmer_cfg.output,
+            dimmer_cfg.auto_switch_off_time,
+            dimmer_cfg.presence,
+        )
+        .await;
+    }
+
     for endpoint in tinkerforge.endpoints() {
         start_enumeration_listener(
             (endpoint.address(), endpoint.port()),

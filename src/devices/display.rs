@@ -15,6 +15,8 @@ use tinkerforge_async::{
 };
 use tokio_stream::{Stream, StreamExt};
 
+use crate::data::wiring::Orientation;
+
 const PIXEL_PER_PAKET: u16 = 448;
 const DISPLAY_WIDTH: usize = 128;
 const DISPLAY_HEIGHT: usize = 64;
@@ -31,8 +33,7 @@ pub struct Lcd128x64BrickletDisplay {
 
 impl Dimensions for Lcd128x64BrickletDisplay {
     fn bounding_box(&self) -> Rectangle {
-        self.orientation
-            .translate_bbox(self.pending_image.bounding_box())
+        translate_bbox(&self.orientation, self.pending_image.bounding_box())
     }
 }
 
@@ -47,7 +48,7 @@ impl DrawTarget for Lcd128x64BrickletDisplay {
         self.pending_image.draw_iter(
             pixels
                 .into_iter()
-                .map(|Pixel(p, c)| Pixel(self.orientation.translate_point(p), c)),
+                .map(|Pixel(p, c)| Pixel(translate_point(&self.orientation, p), c)),
         )
     }
 }
@@ -158,10 +159,13 @@ impl Lcd128x64BrickletDisplay {
                           y,
                           age,
                       }| {
-                    let Point { x, y } = orientation.translate_reverse(Point {
-                        x: x as i32,
-                        y: y as i32,
-                    });
+                    let Point { x, y } = translate_reverse(
+                        &orientation,
+                        Point {
+                            x: x as i32,
+                            y: y as i32,
+                        },
+                    );
                     TouchPositionEvent {
                         pressure,
                         x: x as u16,
@@ -236,87 +240,81 @@ impl<const W: usize, const L: usize> DrawTarget for BooleanImage<W, L> {
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, EnumIter)]
-pub enum Orientation {
-    Straight,
-    LeftDown,
-    UpsideDown,
-    RightDown,
-}
-#[derive(Copy, Clone, Debug, Eq, PartialEq, EnumIter)]
 pub enum OrientationFormat {
     Portrait,
     Landscape,
 }
 
-impl Orientation {
-    #[inline]
-    fn translate_point(&self, p: Point) -> Point {
-        match self {
-            Orientation::Straight => p,
-            Orientation::LeftDown => Point {
-                x: DISPLAY_WIDTH as i32 - p.y,
-                y: p.x,
-            },
-            Orientation::UpsideDown => Point {
-                x: DISPLAY_WIDTH as i32 - p.x - 1,
-                y: DISPLAY_HEIGHT as i32 - p.y - 1,
-            },
-            Orientation::RightDown => Point {
-                x: p.y,
-                y: DISPLAY_HEIGHT as i32 - p.x - 1,
-            },
-        }
+#[inline]
+fn translate_point(orientation: &Orientation, p: Point) -> Point {
+    match orientation {
+        Orientation::Straight => p,
+        Orientation::LeftDown => Point {
+            x: DISPLAY_WIDTH as i32 - p.y,
+            y: p.x,
+        },
+        Orientation::UpsideDown => Point {
+            x: DISPLAY_WIDTH as i32 - p.x - 1,
+            y: DISPLAY_HEIGHT as i32 - p.y - 1,
+        },
+        Orientation::RightDown => Point {
+            x: p.y,
+            y: DISPLAY_HEIGHT as i32 - p.x - 1,
+        },
     }
-    fn translate_reverse(&self, p: Point) -> Point {
-        match self {
-            Orientation::Straight => p,
-            Orientation::LeftDown => Point {
-                x: p.y,
-                y: DISPLAY_WIDTH as i32 - p.x,
-            },
-            Orientation::UpsideDown => Point {
-                x: DISPLAY_WIDTH as i32 - p.x - 1,
-                y: DISPLAY_HEIGHT as i32 - p.y - 1,
-            },
-            Orientation::RightDown => Point {
-                x: DISPLAY_HEIGHT as i32 - p.y - 1,
-                y: p.x,
-            },
-        }
-    }
-    #[inline]
-    pub fn format(&self) -> OrientationFormat {
-        match self {
-            Orientation::Straight | Orientation::UpsideDown => OrientationFormat::Landscape,
-            Orientation::LeftDown | Orientation::RightDown => OrientationFormat::Portrait,
-        }
-    }
-    fn translate_bbox(&self, bbox: Rectangle) -> Rectangle {
-        match self.format() {
-            OrientationFormat::Landscape => bbox,
-            OrientationFormat::Portrait => Rectangle {
-                top_left: Default::default(),
-                size: Size {
-                    width: bbox.size.height,
-                    height: bbox.size.width,
-                },
-            },
-        }
+}
+fn translate_reverse(orientation: &Orientation, p: Point) -> Point {
+    match orientation {
+        Orientation::Straight => p,
+        Orientation::LeftDown => Point {
+            x: p.y,
+            y: DISPLAY_WIDTH as i32 - p.x,
+        },
+        Orientation::UpsideDown => Point {
+            x: DISPLAY_WIDTH as i32 - p.x - 1,
+            y: DISPLAY_HEIGHT as i32 - p.y - 1,
+        },
+        Orientation::RightDown => Point {
+            x: DISPLAY_HEIGHT as i32 - p.y - 1,
+            y: p.x,
+        },
     }
 }
 
+#[inline]
+pub fn format(orientation: &Orientation) -> OrientationFormat {
+    match orientation {
+        Orientation::Straight | Orientation::UpsideDown => OrientationFormat::Landscape,
+        Orientation::LeftDown | Orientation::RightDown => OrientationFormat::Portrait,
+    }
+}
+fn translate_bbox(orientation: &Orientation, bbox: Rectangle) -> Rectangle {
+    match format(orientation) {
+        OrientationFormat::Landscape => bbox,
+        OrientationFormat::Portrait => Rectangle {
+            top_left: Default::default(),
+            size: Size {
+                width: bbox.size.height,
+                height: bbox.size.width,
+            },
+        },
+    }
+}
+impl Orientation {}
+
 #[cfg(test)]
 mod test {
-    use crate::devices::display::Orientation;
     use embedded_graphics::prelude::Point;
     use strum::IntoEnumIterator;
+
+    use crate::devices::display::{translate_point, translate_reverse, Orientation};
 
     #[test]
     fn test_translate_and_reverse() {
         for o in Orientation::iter() {
             let p = Point { x: 7, y: 13 };
-            let p1 = o.translate_point(p);
-            let p2 = o.translate_reverse(p1);
+            let p1 = translate_point(&o, p);
+            let p2 = translate_reverse(&o, p1);
             assert_eq!(p, p2, "Orientation {o:?}");
         }
     }

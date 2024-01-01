@@ -1,6 +1,5 @@
 use std::num::Saturating;
 
-use crate::data::registry::{BrightnessKey, EventRegistry, LightColorKey, SwitchOutputKey};
 use futures::stream::SelectAll;
 use log::{error, info};
 use sub_array::SubArray;
@@ -11,6 +10,8 @@ use tinkerforge_async::{
 use tokio::sync::{mpsc, mpsc::Sender};
 use tokio_stream::{wrappers::ReceiverStream, Stream, StreamExt};
 use tokio_util::either::Either;
+
+use crate::data::{registry::EventRegistry, wiring::DmxConfigEntry};
 
 pub async fn handle_dmx(
     bricklet: DmxBricklet,
@@ -95,25 +96,6 @@ pub async fn handle_dmx(
         }
     });
     tx
-}
-#[derive(Copy, Clone)]
-pub enum DmxConfigEntry {
-    Dimm {
-        register: BrightnessKey,
-        channel: u16,
-    },
-    DimmWhitebalance {
-        brightness_register: BrightnessKey,
-        whitebalance_register: LightColorKey,
-        warm_channel: u16,
-        cold_channel: u16,
-        warm_mireds: u16,
-        cold_mireds: u16,
-    },
-    Switch {
-        register: SwitchOutputKey,
-        channel: u16,
-    },
 }
 
 enum DmxCommand {

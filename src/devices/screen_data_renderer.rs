@@ -34,10 +34,9 @@ use tokio::{
 use tokio_stream::{empty, wrappers::ReceiverStream, StreamExt, StreamNotifyClose};
 use tokio_util::either::Either;
 
+use crate::data::wiring::ScreenSettings;
 use crate::{
-    data::registry::{BrightnessKey, ClockKey, EventRegistry, LightColorKey, TemperatureKey},
-    devices::display::{Lcd128x64BrickletDisplay, Orientation},
-    icons, util,
+    data::registry::EventRegistry, devices::display::Lcd128x64BrickletDisplay, icons, util,
 };
 
 const TEXT_STYLE: MonoTextStyle<BinaryColor> = MonoTextStyle::new(&FONT_6X12, BinaryColor::On);
@@ -391,15 +390,6 @@ enum ScreenMessage {
     UpdateTemperature(f32),
     UpdateLightColor(Saturating<u16>),
     UpdateBrightness(Saturating<u8>),
-}
-#[derive(Debug, Clone, Copy)]
-pub struct ScreenSettings {
-    pub orientation: Orientation,
-    pub clock_key: Option<ClockKey>,
-    pub current_temperature_key: Option<TemperatureKey>,
-    pub adjust_temperature_key: Option<TemperatureKey>,
-    pub light_color_key: Option<LightColorKey>,
-    pub brightness_key: Option<BrightnessKey>,
 }
 
 async fn screen_thread_loop(
