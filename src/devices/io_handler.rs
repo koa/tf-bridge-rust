@@ -6,7 +6,7 @@ use tinkerforge_async::{error::TinkerforgeError, io16_v2_bricklet::Io16V2Brickle
 use tokio::{sync::mpsc, task::JoinHandle, time::sleep};
 use tokio_stream::{wrappers::ReceiverStream, StreamExt};
 
-use crate::data::registry::{ButtonState, DualButtonLayout, EventRegistry};
+use crate::data::registry::{ButtonState, DualButtonLayout, EventRegistry, SingleButtonLayout};
 use crate::data::wiring::ButtonSetting;
 
 pub async fn handle_io16_v2(
@@ -38,6 +38,15 @@ pub async fn handle_io16_v2(
                     error!("Off Button out of range: {}", up_button);
                 }
             }
+            ButtonSetting::Single { button, output } => {
+                if let Some(b) = channel_settings.get_mut(*button as usize) {
+                    *b = ChannelSetting::SingleButton(
+                        event_registry.single_button_sender(*output).await,
+                    );
+                } else {
+                    error!("Button out of range: {}", button);
+                }
+            }
         }
     }
     tokio::spawn(async move {
@@ -67,6 +76,7 @@ enum ChannelSetting {
     None,
     DualButtonUp(mpsc::Sender<ButtonState<DualButtonLayout>>),
     DualButtonDown(mpsc::Sender<ButtonState<DualButtonLayout>>),
+    SingleButton(mpsc::Sender<ButtonState<SingleButtonLayout>>),
 }
 
 async fn io_16_v2_loop(
@@ -105,6 +115,10 @@ async fn io_16_v2_loop(
                         .await
                         .map_err(IoHandlerError::DualButtonUp)?,
                     Some(ChannelSetting::None) => {}
+                    Some(ChannelSetting::SingleButton(sender)) => sender
+                        .send(ButtonState::ShortPressStart(SingleButtonLayout))
+                        .await
+                        .map_err(IoHandlerError::SingleButton)?,
                 }
 
                 let rx = rx.clone();
@@ -135,6 +149,10 @@ async fn io_16_v2_loop(
                         .await
                         .map_err(IoHandlerError::DualButtonUp)?,
                     Some(ChannelSetting::None) => {}
+                    Some(ChannelSetting::SingleButton(sender)) => sender
+                        .send(ButtonState::LongPressStart(SingleButtonLayout))
+                        .await
+                        .map_err(IoHandlerError::SingleButton)?,
                 }
                 let rx = rx.clone();
                 if let Some(running) =
@@ -164,6 +182,10 @@ async fn io_16_v2_loop(
                         .await
                         .map_err(IoHandlerError::DualButtonRelease)?,
                     Some(ChannelSetting::None) => {}
+                    Some(ChannelSetting::SingleButton(sender)) => sender
+                        .send(ButtonState::Released)
+                        .await
+                        .map_err(IoHandlerError::SingleButtonRelease)?,
                 }
                 if let Some(timer) = channel_timer
                     .get_mut(channel as usize)
@@ -186,6 +208,10 @@ pub enum IoHandlerError {
     DualButtonDown(mpsc::error::SendError<ButtonState<DualButtonLayout>>),
     #[error("Cannot send Dual button Up: {0}")]
     DualButtonUp(mpsc::error::SendError<ButtonState<DualButtonLayout>>),
+    #[error("Cannot send Single button press: {0}")]
+    SingleButton(mpsc::error::SendError<ButtonState<SingleButtonLayout>>),
     #[error("Cannot send Dual button Release: {0}")]
     DualButtonRelease(mpsc::error::SendError<ButtonState<DualButtonLayout>>),
+    #[error("Cannot send Single button Release: {0}")]
+    SingleButtonRelease(mpsc::error::SendError<ButtonState<SingleButtonLayout>>),
 }

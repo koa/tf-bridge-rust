@@ -1,6 +1,8 @@
-use futures::SinkExt;
+use std::iter::FilterMap;
 use std::{hash::Hash, num::Saturating, time::Duration};
 
+use futures::stream::SelectAll;
+use futures::SinkExt;
 use log::error;
 use tokio::{
     sync::mpsc::{self, error::SendError, Sender},
@@ -17,10 +19,10 @@ use crate::util::optional_stream;
 
 pub async fn dual_input_dimmer(
     event_registry: &EventRegistry,
-    input: DualButtonKey,
+    inputs: &[DualButtonKey],
     output: BrightnessKey,
     auto_switch_off_time: Duration,
-    presence: Option<SingleButtonKey>,
+    presences: &[SingleButtonKey],
 ) -> AbortHandle {
     let current_brightness = event_registry
         .brightness_stream(output)
@@ -29,12 +31,7 @@ pub async fn dual_input_dimmer(
         .await
         .unwrap_or_default();
     let sender = event_registry.brightness_sender(output).await;
-
-    let input_stream = event_registry
-        .dual_button_stream(input)
-        .await
-        .map(DimmerEvent::ButtonState)
-        .merge(create_presence_stream(event_registry, presence).await);
+    let input_stream = merge_dual_buttons_and_presences(event_registry, inputs, presences).await;
     tokio::spawn(async move {
         if let Err(error) = dual_input_dimmer_task(
             input_stream,
@@ -48,6 +45,42 @@ pub async fn dual_input_dimmer(
         }
     })
     .abort_handle()
+}
+
+async fn merge_dual_buttons_and_presences(
+    event_registry: &EventRegistry,
+    inputs: &[DualButtonKey],
+    presences: &[SingleButtonKey],
+) -> impl Stream<Item = DimmerEvent<DualButtonLayout>> + Unpin {
+    let mut button_streams = SelectAll::new();
+    for input in inputs {
+        button_streams.push(
+            event_registry
+                .dual_button_stream(*input)
+                .await
+                .map(DimmerEvent::ButtonState),
+        );
+    }
+    button_streams.merge(create_presences_stream(event_registry, presences).await)
+}
+
+async fn create_presences_stream<L: Copy + Eq + Hash>(
+    event_registry: &EventRegistry,
+    presences: &[SingleButtonKey],
+) -> impl Stream<Item = DimmerEvent<L>> + Unpin {
+    let mut presence_streams = SelectAll::new();
+    for presence_key in presences {
+        presence_streams.push(
+            event_registry
+                .single_button_stream(*presence_key)
+                .await
+                .filter_map(|s| match s {
+                    ButtonState::ShortPressStart(_) => Some(DimmerEvent::<L>::PresenceDetected),
+                    _ => None,
+                }),
+        );
+    }
+    presence_streams
 }
 
 async fn create_presence_stream<L: Copy + Eq + Hash>(
@@ -64,10 +97,10 @@ async fn create_presence_stream<L: Copy + Eq + Hash>(
 
 pub async fn dual_input_switch(
     event_registry: &EventRegistry,
-    input: DualButtonKey,
+    inputs: &[DualButtonKey],
     output: SwitchOutputKey,
     auto_switch_off_time: Duration,
-    presence: Option<SingleButtonKey>,
+    presences: &[SingleButtonKey],
 ) -> AbortHandle {
     let current_state = event_registry
         .switch_stream(output)
@@ -76,13 +109,7 @@ pub async fn dual_input_switch(
         .await
         .unwrap_or_default();
     let sender = event_registry.switch_sender(output).await;
-
-    let input_stream = event_registry
-        .dual_button_stream(input)
-        .await
-        .map(DimmerEvent::ButtonState)
-        .merge(create_presence_stream(event_registry, presence).await);
-
+    let input_stream = merge_dual_buttons_and_presences(event_registry, inputs, presences).await;
     tokio::spawn(async move {
         if let Err(error) =
             dual_input_switch_task(auto_switch_off_time, current_state, sender, input_stream).await
@@ -95,13 +122,12 @@ pub async fn dual_input_switch(
 
 pub async fn motion_detector(
     event_registry: &EventRegistry,
-    input: SingleButtonKey,
+    inputs: &[SingleButtonKey],
     output: SwitchOutputKey,
     switch_off_time: Duration,
 ) -> AbortHandle {
     let sender = event_registry.switch_sender(output).await;
-    let input_stream =
-        create_presence_stream::<SingleButtonLayout>(event_registry, Some(input)).await;
+    let input_stream = create_presences_stream(event_registry, inputs).await;
     tokio::spawn(async move {
         if let Err(error) = motion_detector_task(switch_off_time, sender, input_stream).await {
             error!("Failed motion detector: {error}")

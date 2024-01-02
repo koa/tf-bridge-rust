@@ -185,7 +185,7 @@ async fn run_enumeration_listener<T: ToSocketAddrs>(
                                         &[ButtonSetting::Dual {
                                             up_button: 7,
                                             down_button: 6,
-                                            output: DualButtonKey::DualButton(Default::default()),
+                                            output: DualButtonKey(Default::default()),
                                         }],
                                     )
                                     .await,
@@ -200,7 +200,7 @@ async fn run_enumeration_listener<T: ToSocketAddrs>(
                                     handle_motion_detector(
                                         MotionDetectorV2Bricklet::new(uid, ipcon.clone()),
                                         event_registry.clone(),
-                                        SingleButtonKey::SingleButton(Default::default()),
+                                        SingleButtonKey(Default::default()),
                                     ),
                                 )
                                 .await;
@@ -299,10 +299,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let wiring = Wiring {
         controllers: Controllers {
             dual_input_dimmers: Box::new([DualInputDimmer {
-                input: DualButtonKey::DualButton(Default::default()),
+                input: Box::new([DualButtonKey(Default::default())]),
                 output: BrightnessKey::Light(Default::default()),
                 auto_switch_off_time: Duration::from_secs(2 * 3600),
-                presence: None,
+                presence: Box::new([]),
             }]),
             dual_input_switches: Box::new([]),
             motion_detectors: Box::new([]),
@@ -347,7 +347,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     info!("Config: \n{}", serde_yaml::to_string(&wiring).unwrap());
 
     let mut debug_stream = event_registry
-        .dual_button_stream(DualButtonKey::DualButton(Default::default()))
+        .dual_button_stream(DualButtonKey(Default::default()))
         .await;
     tokio::spawn(async move {
         while let Some(event) = debug_stream.next().await {
@@ -358,10 +358,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
     for dimmer_cfg in wiring.controllers.dual_input_dimmers.iter() {
         dual_input_dimmer(
             &event_registry,
-            dimmer_cfg.input,
+            dimmer_cfg.input.as_ref(),
             dimmer_cfg.output,
             dimmer_cfg.auto_switch_off_time,
-            dimmer_cfg.presence,
+            dimmer_cfg.presence.as_ref(),
         )
         .await;
     }

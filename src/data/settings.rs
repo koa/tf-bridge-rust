@@ -49,6 +49,28 @@ pub struct GoogleSheet {
     spreadsheet_id: Box<str>,
     light: GoogleLightData,
     light_templates: GoogleLightTemplateData,
+    buttons: GoogleButtonData,
+    button_templates: GoogleButtonTemplate,
+}
+#[derive(Deserialize, Debug)]
+pub struct GoogleButtonData {
+    sheet: Box<str>,
+    range: Box<str>,
+    room_id: Box<str>,
+    button_id: Box<str>,
+    button_idx: Box<str>,
+    button_type: Box<str>,
+    device_address: Box<str>,
+    first_input_idx: Box<str>,
+}
+
+#[derive(Deserialize, Debug)]
+pub struct GoogleButtonTemplate {
+    sheet: Box<str>,
+    range: Box<str>,
+    name: Box<str>,
+    discriminator: Box<str>,
+    sub_devices: Box<str>,
 }
 #[derive(Deserialize, Debug)]
 pub struct GoogleLightTemplateData {
@@ -113,6 +135,13 @@ impl GoogleSheet {
     pub fn light_templates(&self) -> &GoogleLightTemplateData {
         &self.light_templates
     }
+
+    pub fn buttons(&self) -> &GoogleButtonData {
+        &self.buttons
+    }
+    pub fn button_templates(&self) -> &GoogleButtonTemplate {
+        &self.button_templates
+    }
 }
 impl GoogleLightTemplateData {
     pub fn sheet(&self) -> &str {
@@ -172,6 +201,50 @@ impl GoogleLightData {
     }
     pub fn touchscreen_brightness(&self) -> &str {
         &self.touchscreen_brightness
+    }
+}
+
+impl GoogleButtonData {
+    pub fn sheet(&self) -> &str {
+        &self.sheet
+    }
+    pub fn range(&self) -> &str {
+        &self.range
+    }
+    pub fn room_id(&self) -> &str {
+        &self.room_id
+    }
+    pub fn button_id(&self) -> &str {
+        &self.button_id
+    }
+    pub fn button_idx(&self) -> &str {
+        &self.button_idx
+    }
+    pub fn button_type(&self) -> &str {
+        &self.button_type
+    }
+    pub fn device_address(&self) -> &str {
+        &self.device_address
+    }
+    pub fn first_input_idx(&self) -> &str {
+        &self.first_input_idx
+    }
+}
+impl GoogleButtonTemplate {
+    pub fn sheet(&self) -> &str {
+        &self.sheet
+    }
+    pub fn range(&self) -> &str {
+        &self.range
+    }
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+    pub fn discriminator(&self) -> &str {
+        &self.discriminator
+    }
+    pub fn sub_devices(&self) -> &str {
+        &self.sub_devices
     }
 }
 

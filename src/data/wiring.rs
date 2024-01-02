@@ -25,23 +25,31 @@ pub struct Controllers {
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct DualInputDimmer {
-    pub input: DualButtonKey,
+    pub input: Box<[DualButtonKey]>,
     pub output: BrightnessKey,
     pub auto_switch_off_time: Duration,
-    pub presence: Option<SingleButtonKey>,
+    pub presence: Box<[SingleButtonKey]>,
 }
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct DualInputSwitch {
-    input: DualButtonKey,
-    output: SwitchOutputKey,
-    auto_switch_off_time: Duration,
-    presence: Option<SingleButtonKey>,
+    pub input: Box<[DualButtonKey]>,
+    pub output: SwitchOutputKey,
+    pub auto_switch_off_time: Duration,
+    pub presence: Box<[SingleButtonKey]>,
 }
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
-pub struct MotionDetector {
-    input: SingleButtonKey,
-    output: SwitchOutputKey,
-    switch_off_time: Duration,
+pub enum MotionDetector {
+    Switch {
+        input: Box<[SingleButtonKey]>,
+        output: SwitchOutputKey,
+        switch_off_time: Duration,
+    },
+    Dimmer {
+        input: Box<[SingleButtonKey]>,
+        output: BrightnessKey,
+        brightness: Option<BrightnessKey>,
+        switch_off_time: Duration,
+    },
 }
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
 pub struct TinkerforgeDevices {
@@ -96,7 +104,7 @@ pub enum DmxConfigEntry {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct IoSettings {
-    entries: Box<[ButtonSetting]>,
+    pub entries: Box<[ButtonSetting]>,
 }
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub enum ButtonSetting {
@@ -104,6 +112,10 @@ pub enum ButtonSetting {
         up_button: u8,
         down_button: u8,
         output: DualButtonKey,
+    },
+    Single {
+        button: u8,
+        output: SingleButtonKey,
     },
 }
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
@@ -127,16 +139,28 @@ pub struct TemperatureSettings {
 #[cfg(test)]
 mod test {
     use std::collections::HashMap;
+    use std::time::Duration;
 
-    use crate::data::registry::{BrightnessKey, LightColorKey};
-    use crate::data::wiring::{DmxConfigEntry, DmxSettings, TinkerforgeDevices, Wiring};
+    use crate::data::registry::{BrightnessKey, DualButtonKey, LightColorKey};
+    use crate::data::wiring::{
+        Controllers, DmxConfigEntry, DmxSettings, DualInputDimmer, TinkerforgeDevices, Wiring,
+    };
     use crate::data::DeviceInRoom;
     use crate::util::kelvin_2_mireds;
 
     #[test]
     fn test_serialize_tinkerforge() {
         let data = Wiring {
-            controllers: Default::default(),
+            controllers: Controllers {
+                dual_input_dimmers: Box::new([DualInputDimmer {
+                    input: Box::new([DualButtonKey(Default::default())]),
+                    output: BrightnessKey::Light(Default::default()),
+                    auto_switch_off_time: Duration::from_secs(2 * 3600),
+                    presence: Box::new([]),
+                }]),
+                dual_input_switches: Box::new([]),
+                motion_detectors: Box::new([]),
+            },
             tinkerforge_devices: TinkerforgeDevices {
                 lcd_screens: Default::default(),
                 dmx_bricklets: HashMap::from([(

@@ -50,13 +50,9 @@ pub enum SwitchOutputKey {
 }
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Serialize, Deserialize)]
-pub enum DualButtonKey {
-    DualButton(SubDeviceInRoom),
-}
+pub struct DualButtonKey(pub SubDeviceInRoom);
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Serialize, Deserialize)]
-pub enum SingleButtonKey {
-    SingleButton(SubDeviceInRoom),
-}
+pub struct SingleButtonKey(pub SubDeviceInRoom);
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Default, Debug)]
 pub enum ButtonState<B: Copy + Clone + Eq + Hash> {
     #[default]
