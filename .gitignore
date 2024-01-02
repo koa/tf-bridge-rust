@@ -3,4 +3,5 @@
 /.idea/modules.xml
 /.idea/tf_bridge_rust.iml
 /.idea/vcs.xml
-config.yaml
+/config.yaml
+/sa-development.json

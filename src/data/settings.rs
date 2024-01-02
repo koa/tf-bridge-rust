@@ -44,9 +44,35 @@ impl TinkerforgeEndpoint {
 }
 #[derive(Deserialize, Debug)]
 pub struct GoogleSheet {
-    key_file: Option<String>,
-    key_data: Option<String>,
-    spreadsheet_id: String,
+    key_file: Option<Box<str>>,
+    key_data: Option<Box<str>>,
+    spreadsheet_id: Box<str>,
+    light: GoogleLightData,
+    light_templates: GoogleLightTemplateData,
+}
+#[derive(Deserialize, Debug)]
+pub struct GoogleLightTemplateData {
+    sheet: Box<str>,
+    range: Box<str>,
+    name_column: Box<str>,
+    discriminator_column: Box<str>,
+    temperature_warm_column: Box<str>,
+    temperature_cold_column: Box<str>,
+}
+#[derive(Deserialize, Debug)]
+pub struct GoogleLightData {
+    sheet: Box<str>,
+    range: Box<str>,
+    room_id: Box<str>,
+    light_id: Box<str>,
+    light_idx: Box<str>,
+    template: Box<str>,
+    device_address: Box<str>,
+    bus_start_address: Box<str>,
+    manual_buttons: Box<[Box<str>]>,
+    presence_detectors: Box<[Box<str>]>,
+    touchscreen_whitebalance: Box<str>,
+    touchscreen_brightness: Box<str>,
 }
 #[derive(Error, Debug)]
 pub enum GoogleError {
@@ -59,7 +85,7 @@ pub enum GoogleError {
 impl GoogleSheet {
     pub async fn read_secret(&self) -> Result<ServiceAccountKey, GoogleError> {
         if let Some(filename) = &self.key_file {
-            let result = read_service_account_key(filename).await;
+            let result = read_service_account_key(filename.as_ref()).await;
             match result {
                 Ok(key) => Ok(key),
                 Err(error) => {
@@ -68,7 +94,7 @@ impl GoogleSheet {
                 }
             }
         } else if let Some(data) = &self.key_data {
-            Ok(parse_service_account_key(data)?)
+            Ok(parse_service_account_key(data.as_ref())?)
         } else {
             Err(GoogleError::ConfigContent {
                 description: "neither key_file nor key_data filled in",
@@ -79,13 +105,81 @@ impl GoogleSheet {
     pub fn spreadsheet_id(&self) -> &str {
         &self.spreadsheet_id
     }
+
+    pub fn light(&self) -> &GoogleLightData {
+        &self.light
+    }
+
+    pub fn light_templates(&self) -> &GoogleLightTemplateData {
+        &self.light_templates
+    }
+}
+impl GoogleLightTemplateData {
+    pub fn sheet(&self) -> &str {
+        &self.sheet
+    }
+    pub fn range(&self) -> &str {
+        &self.range
+    }
+    pub fn name_column(&self) -> &str {
+        &self.name_column
+    }
+    pub fn discriminator_column(&self) -> &str {
+        &self.discriminator_column
+    }
+    pub fn temperature_warm_column(&self) -> &str {
+        &self.temperature_warm_column
+    }
+    pub fn temperature_cold_column(&self) -> &str {
+        &self.temperature_cold_column
+    }
+}
+impl GoogleLightData {
+    pub fn range(&self) -> &str {
+        &self.range
+    }
+
+    pub fn room_id(&self) -> &str {
+        &self.room_id
+    }
+    pub fn light_id(&self) -> &str {
+        &self.light_id
+    }
+    pub fn light_idx(&self) -> &str {
+        &self.light_idx
+    }
+    pub fn sheet(&self) -> &str {
+        &self.sheet
+    }
+
+    pub fn template(&self) -> &str {
+        &self.template
+    }
+    pub fn device_address(&self) -> &str {
+        &self.device_address
+    }
+    pub fn bus_start_address(&self) -> &str {
+        &self.bus_start_address
+    }
+    pub fn manual_buttons(&self) -> &[Box<str>] {
+        &self.manual_buttons
+    }
+    pub fn presence_detectors(&self) -> &[Box<str>] {
+        &self.presence_detectors
+    }
+    pub fn touchscreen_whitebalance(&self) -> &str {
+        &self.touchscreen_whitebalance
+    }
+    pub fn touchscreen_brightness(&self) -> &str {
+        &self.touchscreen_brightness
+    }
 }
 
 #[derive(Debug)]
 pub struct Settings {
     pub server: ServerSettings,
     pub tinkerforge: Tinkerforge,
-    pub google_sheet: GoogleSheet,
+    pub google_sheet: Option<GoogleSheet>,
 }
 
 const DEFAULT_IP_ADDRESS: IpAddr = IpAddr::V6(Ipv6Addr::UNSPECIFIED);
