@@ -126,10 +126,14 @@ async fn run_enumeration_listener<T: ToSocketAddrs>(
                                             orientation: Orientation::LeftDown,
                                             clock_key: Some(ClockKey::MinuteClock),
                                             current_temperature_key: Some(
-                                                TemperatureKey::CurrentTemperature,
+                                                TemperatureKey::CurrentTemperature(
+                                                    Default::default(),
+                                                ),
                                             ),
                                             adjust_temperature_key: Some(
-                                                TemperatureKey::TargetTemperature,
+                                                TemperatureKey::TargetTemperature(
+                                                    Default::default(),
+                                                ),
                                             ),
                                             light_color_key: Some(LightColorKey::Light(
                                                 DeviceInRoom::default(),
@@ -213,7 +217,7 @@ async fn run_enumeration_listener<T: ToSocketAddrs>(
                                     handle_temperature(
                                         TemperatureV2Bricklet::new(uid, ipcon.clone()),
                                         event_registry.clone(),
-                                        TemperatureKey::CurrentTemperature,
+                                        TemperatureKey::CurrentTemperature(Default::default()),
                                     ),
                                 )
                                 .await;
@@ -306,6 +310,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             }]),
             dual_input_switches: Box::new([]),
             motion_detectors: Box::new([]),
+            heat_controllers: Box::new([]),
         },
         tinkerforge_devices: TinkerforgeDevices {
             lcd_screens: Default::default(),

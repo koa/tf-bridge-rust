@@ -1,6 +1,7 @@
 use std::io;
 use std::net::{IpAddr, Ipv6Addr};
 
+use crate::data::wiring::Orientation;
 use config::{Config, ConfigError, Environment, File};
 use google_sheets4::oauth2::{
     parse_service_account_key, read_service_account_key, ServiceAccountKey,
@@ -51,6 +52,7 @@ pub struct GoogleSheet {
     light_templates: GoogleLightTemplateData,
     buttons: GoogleButtonData,
     button_templates: GoogleButtonTemplate,
+    room_controllers: GoogleRoomController,
 }
 #[derive(Deserialize, Debug)]
 pub struct GoogleButtonData {
@@ -95,6 +97,20 @@ pub struct GoogleLightData {
     presence_detectors: Box<[Box<str>]>,
     touchscreen_whitebalance: Box<str>,
     touchscreen_brightness: Box<str>,
+}
+#[derive(Deserialize, Debug)]
+pub struct GoogleRoomController {
+    sheet: Box<str>,
+    range: Box<str>,
+    room_id: Box<str>,
+    controller_id: Box<str>,
+    controller_idx: Box<str>,
+    orientation: Box<str>,
+    touchscreen_device_address: Box<str>,
+    temperature_device_address: Box<str>,
+    enable_heat_control: Box<str>,
+    enable_whitebalance_control: Box<str>,
+    enable_brightness_control: Box<str>,
 }
 #[derive(Error, Debug)]
 pub enum GoogleError {
@@ -141,6 +157,10 @@ impl GoogleSheet {
     }
     pub fn button_templates(&self) -> &GoogleButtonTemplate {
         &self.button_templates
+    }
+
+    pub fn room_controllers(&self) -> &GoogleRoomController {
+        &self.room_controllers
     }
 }
 impl GoogleLightTemplateData {
@@ -245,6 +265,45 @@ impl GoogleButtonTemplate {
     }
     pub fn sub_devices(&self) -> &str {
         &self.sub_devices
+    }
+}
+
+impl GoogleRoomController {
+    pub fn sheet(&self) -> &str {
+        &self.sheet
+    }
+    pub fn range(&self) -> &str {
+        &self.range
+    }
+    pub fn room_id(&self) -> &str {
+        &self.room_id
+    }
+    pub fn controller_id(&self) -> &str {
+        &self.controller_id
+    }
+
+    pub fn touchscreen_device_address(&self) -> &str {
+        &self.touchscreen_device_address
+    }
+    pub fn temperature_device_address(&self) -> &str {
+        &self.temperature_device_address
+    }
+    pub fn controller_idx(&self) -> &str {
+        &self.controller_idx
+    }
+
+    pub fn orientation(&self) -> &str {
+        &self.orientation
+    }
+
+    pub fn enable_heat_control(&self) -> &Box<str> {
+        &self.enable_heat_control
+    }
+    pub fn enable_whitebalance_control(&self) -> &Box<str> {
+        &self.enable_whitebalance_control
+    }
+    pub fn enable_brightness_control(&self) -> &Box<str> {
+        &self.enable_brightness_control
     }
 }
 

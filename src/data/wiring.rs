@@ -21,6 +21,7 @@ pub struct Controllers {
     pub dual_input_dimmers: Box<[DualInputDimmer]>,
     pub dual_input_switches: Box<[DualInputSwitch]>,
     pub motion_detectors: Box<[MotionDetector]>,
+    pub heat_controllers: Box<[HeatController]>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -50,6 +51,12 @@ pub enum MotionDetector {
         brightness: Option<BrightnessKey>,
         switch_off_time: Duration,
     },
+}
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct HeatController {
+    pub current_value_input: TemperatureKey,
+    pub target_value_input: TemperatureKey,
+    pub output: SwitchOutputKey,
 }
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
 pub struct TinkerforgeDevices {
@@ -133,7 +140,7 @@ pub struct RelayChannelEntry {
 }
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub struct TemperatureSettings {
-    output: TemperatureKey,
+    pub output: TemperatureKey,
 }
 
 #[cfg(test)]
@@ -160,6 +167,7 @@ mod test {
                 }]),
                 dual_input_switches: Box::new([]),
                 motion_detectors: Box::new([]),
+                heat_controllers: Box::new([]),
             },
             tinkerforge_devices: TinkerforgeDevices {
                 lcd_screens: Default::default(),

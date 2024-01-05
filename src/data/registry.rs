@@ -26,8 +26,8 @@ impl TypedKey for ClockKey {
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Serialize, Deserialize)]
 pub enum TemperatureKey {
-    CurrentTemperature,
-    TargetTemperature,
+    CurrentTemperature(DeviceInRoom),
+    TargetTemperature(DeviceInRoom),
 }
 impl TypedKey for TemperatureKey {
     type Value = f32;
@@ -36,10 +36,12 @@ impl TypedKey for TemperatureKey {
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Serialize, Deserialize)]
 pub enum LightColorKey {
     Light(DeviceInRoom),
+    TouchscreenController(DeviceInRoom),
 }
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Serialize, Deserialize)]
 pub enum BrightnessKey {
     Light(DeviceInRoom),
+    TouchscreenController(DeviceInRoom),
 }
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Serialize, Deserialize)]

@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::time::Duration;
 use std::{
     collections::{HashMap, HashSet},
@@ -7,6 +8,7 @@ use std::{
 };
 
 use futures::StreamExt;
+use google_sheets4::api::SpreadsheetMethods;
 use google_sheets4::{
     api::{BatchUpdateValuesRequest, CellData, GridData, Spreadsheet, ValueRange},
     hyper::{client::HttpConnector, Client},
@@ -15,15 +17,22 @@ use google_sheets4::{
     Sheets,
 };
 use log::error;
-use prometheus::register;
+use serde::de::Visitor;
+use serde::{Deserialize, Deserializer};
+use serde_yaml::Value;
 use thiserror::Error;
 
 use crate::data::registry::{
-    BrightnessKey, DualButtonKey, LightColorKey, SingleButtonKey, SwitchOutputKey,
+    BrightnessKey, ClockKey, DualButtonKey, LightColorKey, SingleButtonKey, SwitchOutputKey,
+    TemperatureKey,
+};
+use crate::data::settings::{
+    GoogleButtonData, GoogleButtonTemplate, GoogleLightData, GoogleLightTemplateData, GoogleSheet,
 };
 use crate::data::wiring::{
     ButtonSetting, Controllers, DmxConfigEntry, DmxSettings, DualInputDimmer, DualInputSwitch,
-    IoSettings, MotionDetector, TinkerforgeDevices, Wiring,
+    HeatController, IoSettings, MotionDetector, Orientation, ScreenSettings, TemperatureSettings,
+    TinkerforgeDevices, Wiring,
 };
 use crate::data::{DeviceInRoom, SubDeviceInRoom, Uid};
 use crate::{
@@ -50,6 +59,8 @@ pub enum GoogleDataError {
     ButtonTemplateHeader(HeaderError),
     #[error("Error parsing button header: {0}")]
     ButtonHeader(HeaderError),
+    #[error("Error parsing controller header: {0}")]
+    ControllerHeader(HeaderError),
 }
 
 enum LightTemplateTypes {
@@ -91,12 +102,18 @@ pub async fn read_sheet_data() -> Result<Option<Wiring>, GoogleDataError> {
         let light_config = config.light();
         let button_templates = config.button_templates();
         let button_config = config.buttons();
+        let room_controllers = config.room_controllers();
 
         let spreadsheet_methods = hub.spreadsheets();
         let (_, sheet) = spreadsheet_methods
             .get(config.spreadsheet_id())
             .add_scope("https://www.googleapis.com/auth/spreadsheets")
             .include_grid_data(true)
+            .add_ranges(&format!(
+                "{}!{}",
+                room_controllers.sheet(),
+                room_controllers.range()
+            ))
             .add_ranges(&format!(
                 "{}!{}",
                 light_config.sheet(),
@@ -121,530 +138,67 @@ pub async fn read_sheet_data() -> Result<Option<Wiring>, GoogleDataError> {
             .await?;
         let mut io_bricklets = HashMap::<_, Vec<_>>::new();
         let mut dmx_bricklets = HashMap::<_, Vec<_>>::new();
+        let mut lcd_screens = HashMap::new();
+        let mut temperature_sensors = HashMap::new();
+
         let mut dual_input_dimmers = Vec::new();
         let mut dual_input_switches = Vec::new();
         let mut motion_detectors = Vec::new();
+        let mut heat_controllers = Vec::new();
 
         let mut single_button_adresses = HashMap::new();
         let mut dual_button_adresses = HashMap::new();
-        let mut button_template_map = HashMap::new();
-        if let Some(button_templates_grid) = find_sheet_by_name(&sheet, button_templates.sheet()) {
-            let (_, _, mut rows) = get_grid_and_coordinates(button_templates_grid);
-            if let Some((_, header)) = rows.next() {
-                let [name_column, sub_device_column, discriminiator_column] = parse_headers(
-                    header,
-                    [
-                        button_templates.name(),
-                        button_templates.sub_devices(),
-                        button_templates.discriminator(),
-                    ],
-                )
-                .map_err(GoogleDataError::ButtonTemplateHeader)?;
-                for (_, row) in rows {
-                    if let (Some(name), Some(sub_devices), Some(discriminator)) = (
-                        get_cell_content(row, name_column),
-                        get_cell_content(row, sub_device_column),
-                        get_cell_content(row, discriminiator_column),
-                    ) {
-                        let sub_devices = sub_devices
-                            .split(',')
-                            .collect::<Vec<_>>()
-                            .into_boxed_slice();
-                        if let Some(style) = if discriminator == "Single" {
-                            Some(ButtonStyle::Single)
-                        } else if discriminator == "Dual" {
-                            Some(ButtonStyle::Dual)
-                        } else {
-                            None
-                        } {
-                            button_template_map
-                                .insert(name, ButtonTemplateTypes { style, sub_devices });
-                        }
-                    }
-                }
-            }
-        }
-        if let Some(button_grid) = find_sheet_by_name(&sheet, button_config.sheet()) {
-            struct ButtonRowContent<'a> {
-                room: Room,
-                button_template: &'a ButtonTemplateTypes<'a>,
-                button_id: &'a str,
-                button_id_in_room: Option<u16>,
-                device_address: Uid,
-                first_input_idx: u8,
-            }
-            let (start_row, start_column, mut rows) = get_grid_and_coordinates(button_grid);
-            if let Some((_, header)) = rows.next() {
-                let [room_column, button_id_column, button_idx_column, type_column, device_address_column, first_input_idx_column] =
-                    parse_headers(
-                        header,
-                        [
-                            button_config.room_id(),
-                            button_config.button_id(),
-                            button_config.button_idx(),
-                            button_config.button_type(),
-                            button_config.device_address(),
-                            button_config.first_input_idx(),
-                        ],
-                    )
-                    .map_err(GoogleDataError::ButtonHeader)?;
-                let mut button_ids_of_rooms = HashMap::<_, Vec<_>>::new();
-                for (row_idx, row) in rows {
-                    if let (
-                        Some(room),
-                        Some(button_id),
-                        button_id_in_room,
-                        Some(button_template),
-                        Some(device_address),
-                        Some(first_input_idx),
-                    ) = (
-                        get_cell_content(row, room_column)
-                            .map(Room::from_str)
-                            .and_then(Result::ok),
-                        get_cell_content(row, button_id_column),
-                        get_cell_integer(row, button_idx_column).map(|id| id as u16),
-                        get_cell_content(row, type_column).and_then(|t| button_template_map.get(t)),
-                        get_cell_content(row, device_address_column)
-                            .map(Uid::from_str)
-                            .and_then(Result::ok),
-                        get_cell_integer(row, first_input_idx_column).map(|id| id as u8),
-                    ) {
-                        let row = row_idx + start_row;
-                        let col = button_idx_column + start_column;
-                        let coordinates = CellCoordinates { row, col };
-                        button_ids_of_rooms.entry(room).or_default().push((
-                            coordinates,
-                            ButtonRowContent {
-                                room,
-                                button_template,
-                                button_id,
-                                button_id_in_room,
-                                device_address,
-                                first_input_idx,
-                            },
-                        ));
-                    }
-                }
-                let mut updates = Vec::new();
-                let mut button_device_rows = Vec::new();
-                for (devices) in button_ids_of_rooms.into_values() {
-                    let mut occupied_ids = HashSet::new();
-                    let mut remaining_devices = Vec::with_capacity(devices.len());
-                    for (coordinates, button_row) in devices {
-                        if if let Some(id) = button_row.button_id_in_room {
-                            if occupied_ids.contains(&id) {
-                                true
-                            } else {
-                                occupied_ids.insert(id);
-                                false
-                            }
-                        } else {
-                            true
-                        } {
-                            remaining_devices.push((coordinates, button_row));
-                        } else {
-                            button_device_rows.push(button_row);
-                        };
-                    }
-                    let mut next_id = 0;
-                    for (coordinates, mut row) in remaining_devices {
-                        while occupied_ids.contains(&next_id) {
-                            next_id += 1;
-                        }
-                        row.button_id_in_room = Some(next_id);
-                        button_device_rows.push(row);
-                        updates.push(ValueRange {
-                            major_dimension: None,
-                            range: Some(format!("{}!{}", button_config.sheet(), coordinates)),
-                            values: Some(vec![vec![next_id.into()]]),
-                        });
-                        next_id += 1;
-                    }
-                }
-                if !updates.is_empty() {
-                    let update = BatchUpdateValuesRequest {
-                        data: Some(updates),
-                        include_values_in_response: None,
-                        response_date_time_render_option: None,
-                        response_value_render_option: None,
-                        value_input_option: Some("RAW".to_string()),
-                    };
-                    spreadsheet_methods
-                        .values_batch_update(update, config.spreadsheet_id())
-                        .doit()
-                        .await?;
-                }
-                for button_row in button_device_rows {
-                    let io_bricklet_settings =
-                        io_bricklets.entry(button_row.device_address).or_default();
-                    let mut current_input_idx = button_row.first_input_idx;
-                    for (subdevice_id, subdevice_name) in
-                        button_row.button_template.sub_devices.iter().enumerate()
-                    {
-                        let device_key = format!("{}, {}", button_row.button_id, subdevice_name)
-                            .into_boxed_str();
-
-                        let sub_device_in_room = SubDeviceInRoom {
-                            room: button_row.room,
-                            device_idx: button_row.button_id_in_room.unwrap(),
-                            sub_device_idx: subdevice_id as u16,
-                        };
-                        match button_row.button_template.style {
-                            ButtonStyle::Single => {
-                                let output = SingleButtonKey(sub_device_in_room);
-                                io_bricklet_settings.push(ButtonSetting::Single {
-                                    button: current_input_idx,
-                                    output,
-                                });
-                                single_button_adresses.insert(device_key, output);
-                                current_input_idx += 1;
-                            }
-                            ButtonStyle::Dual => {
-                                let output = DualButtonKey(sub_device_in_room);
-                                io_bricklet_settings.push(ButtonSetting::Dual {
-                                    up_button: current_input_idx + 1,
-                                    down_button: current_input_idx,
-                                    output,
-                                });
-                                dual_button_adresses.insert(device_key, output);
-                                current_input_idx += 2;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        let mut light_template_map = HashMap::new();
-        if let Some(light_templates_grid) = find_sheet_by_name(&sheet, light_templates.sheet()) {
-            let (_, _, mut rows) = get_grid_and_coordinates(light_templates_grid);
-            if let Some((_, header)) = rows.next() {
-                let [name_column, discriminator_column, warm_column, cold_column] = parse_headers(
-                    header,
-                    [
-                        light_templates.name_column(),
-                        light_templates.discriminator_column(),
-                        light_templates.temperature_warm_column(),
-                        light_templates.temperature_cold_column(),
-                    ],
-                )
-                .map_err(GoogleDataError::LightTemplateHeader)?;
-                for (_, row) in rows {
-                    if let (Some(name), Some(discriminator)) = (
-                        get_cell_content(&row, name_column),
-                        get_cell_content(&row, discriminator_column),
-                    ) {
-                        if discriminator == "Switch" {
-                            light_template_map.insert(name, LightTemplateTypes::Switch);
-                        }
-                        if discriminator == "Dimm" {
-                            light_template_map.insert(name, LightTemplateTypes::Dimm);
-                        }
-                        if discriminator == "DimmWhitebalance" {
-                            if let (Some(warm_temperature), Some(cold_temperature)) = (
-                                get_cell_integer(&row, warm_column),
-                                get_cell_integer(&row, cold_column),
-                            ) {
-                                light_template_map.insert(
-                                    name,
-                                    LightTemplateTypes::DimmWhitebalance {
-                                        warm_temperature: kelvin_2_mireds(warm_temperature as u16),
-                                        cold_temperature: kelvin_2_mireds(cold_temperature as u16),
-                                    },
-                                );
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        if let Some(light_grid) = find_sheet_by_name(&sheet, light_config.sheet()) {
-            struct LightRowContent<'a> {
-                room: Room,
-                light_template: &'a LightTemplateTypes,
-                device_id: &'a str,
-                device_id_in_room: Option<u16>,
-                device_address: Uid,
-                bus_start_address: u16,
-                manual_buttons: Box<[&'a str]>,
-                presence_detectors: Box<[&'a str]>,
-                touchscreen_whitebalance: Option<&'a str>,
-                touchscreen_brightness: Option<&'a str>,
-            }
-            let (start_row, start_column, mut rows) = get_grid_and_coordinates(light_grid);
-            if let Some((_, header)) = rows.next() {
-                let [room_column, light_id_column, light_idx_column, template_column, device_address_column, bus_start_address_column, touchscreen_whitebalance_column, touchscreen_brightness_column] =
-                    parse_headers(
-                        header,
-                        [
-                            light_config.room_id(),
-                            light_config.light_id(),
-                            light_config.light_idx(),
-                            light_config.template(),
-                            light_config.device_address(),
-                            light_config.bus_start_address(),
-                            light_config.touchscreen_whitebalance(),
-                            light_config.touchscreen_brightness(),
-                        ],
-                    )
-                    .map_err(GoogleDataError::LightHeader)?;
-                let manual_button_columns = parse_dynamic_headers(
-                    header,
-                    &light_config
-                        .manual_buttons()
-                        .iter()
-                        .map(|c| c.as_ref())
-                        .collect::<Vec<_>>(),
-                )
-                .map_err(GoogleDataError::LightHeader)?;
-                let presence_detector_columns = parse_dynamic_headers(
-                    header,
-                    &light_config
-                        .presence_detectors()
-                        .iter()
-                        .map(|c| c.as_ref())
-                        .collect::<Vec<_>>(),
-                )
-                .map_err(GoogleDataError::LightHeader)?;
-                let mut device_ids_of_rooms = HashMap::<_, Vec<_>>::new();
-                for (row_idx, row) in rows {
-                    if let (
-                        Some(room),
-                        device_id_in_room,
-                        Some(device_id),
-                        Some(light_template),
-                        Some(device_address),
-                        Some(bus_start_address),
-                        manual_buttons,
-                        presence_detectors,
-                        touchscreen_whitebalance,
-                        touchscreen_brightness,
-                    ) = (
-                        get_cell_content(row, room_column)
-                            .map(Room::from_str)
-                            .and_then(Result::ok),
-                        get_cell_integer(row, light_idx_column).map(|id| id as u16),
-                        get_cell_content(row, light_id_column),
-                        get_cell_content(row, template_column)
-                            .and_then(|t| light_template_map.get(t)),
-                        get_cell_content(row, device_address_column)
-                            .map(Uid::from_str)
-                            .and_then(Result::ok),
-                        get_cell_integer(row, bus_start_address_column),
-                        manual_button_columns
-                            .iter()
-                            .filter_map(|id| get_cell_content(row, *id))
-                            .filter(|s| !s.is_empty())
-                            .collect::<Vec<_>>()
-                            .into_boxed_slice(),
-                        presence_detector_columns
-                            .iter()
-                            .filter_map(|id| get_cell_content(row, *id))
-                            .filter(|s| !s.is_empty())
-                            .collect::<Vec<_>>()
-                            .into_boxed_slice(),
-                        get_cell_content(row, touchscreen_whitebalance_column),
-                        get_cell_content(row, touchscreen_brightness_column),
-                    ) {
-                        let row = row_idx + start_row;
-                        let col = light_idx_column + start_column;
-                        let coordinates = CellCoordinates { row, col };
-                        device_ids_of_rooms.entry(room).or_default().push((
-                            coordinates,
-                            LightRowContent {
-                                room,
-                                light_template,
-                                device_id,
-                                device_id_in_room,
-                                device_address,
-                                bus_start_address: bus_start_address as u16,
-                                manual_buttons,
-                                presence_detectors,
-                                touchscreen_whitebalance,
-                                touchscreen_brightness,
-                            },
-                        ));
-                        //info!("Room: {room:?}, idx: {coordinates}");
-                    }
-                }
-                let mut updates = Vec::new();
-                let mut light_device_rows = Vec::new();
-                for (devices) in device_ids_of_rooms.into_values() {
-                    let mut occupied_ids = HashSet::new();
-                    let mut remaining_devices = Vec::with_capacity(devices.len());
-                    for (coordinates, light_row) in devices {
-                        if if let Some(id) = light_row.device_id_in_room {
-                            if occupied_ids.contains(&id) {
-                                true
-                            } else {
-                                occupied_ids.insert(id);
-                                false
-                            }
-                        } else {
-                            true
-                        } {
-                            remaining_devices.push((coordinates, light_row));
-                        } else {
-                            light_device_rows.push(light_row);
-                        };
-                    }
-                    let mut next_id = 0;
-                    for (coordinates, mut row) in remaining_devices {
-                        while occupied_ids.contains(&next_id) {
-                            next_id += 1;
-                        }
-                        row.device_id_in_room = Some(next_id);
-                        light_device_rows.push(row);
-                        updates.push(ValueRange {
-                            major_dimension: None,
-                            range: Some(format!("{}!{}", light_config.sheet(), coordinates)),
-                            values: Some(vec![vec![next_id.into()]]),
-                        });
-                        next_id += 1;
-                    }
-                }
-                if !updates.is_empty() {
-                    let update = BatchUpdateValuesRequest {
-                        data: Some(updates),
-                        include_values_in_response: None,
-                        response_date_time_render_option: None,
-                        response_value_render_option: None,
-                        value_input_option: Some("RAW".to_string()),
-                    };
-                    spreadsheet_methods
-                        .values_batch_update(update, config.spreadsheet_id())
-                        .doit()
-                        .await?;
-                }
-                for light_row in light_device_rows {
-                    let dmx_bricklet_settings =
-                        dmx_bricklets.entry(light_row.device_address).or_default();
-                    let template = light_row.light_template;
-
-                    let manual_buttons = light_row
-                        .manual_buttons
-                        .iter()
-                        .flat_map(|name| dual_button_adresses.get(*name))
-                        .copied()
-                        .collect::<Vec<_>>()
-                        .into_boxed_slice();
-                    let presence_detectors = light_row
-                        .presence_detectors
-                        .iter()
-                        .flat_map(|name| single_button_adresses.get(*name))
-                        .copied()
-                        .collect::<Vec<_>>()
-                        .into_boxed_slice();
-                    let auto_switch_off_time = if manual_buttons.is_empty() {
-                        Duration::from_secs(2 * 60)
-                    } else if presence_detectors.is_empty() {
-                        Duration::from_secs(2 * 3600)
-                    } else {
-                        Duration::from_secs(3600)
-                    };
-                    match template {
-                        LightTemplateTypes::Switch => {
-                            let register = SwitchOutputKey::Light(DeviceInRoom {
-                                room: light_row.room,
-                                idx: light_row.device_id_in_room.unwrap(),
-                            });
-                            dmx_bricklet_settings.push(DmxConfigEntry::Switch {
-                                register,
-                                channel: light_row.bus_start_address,
-                            });
-                            if manual_buttons.is_empty() {
-                                if !presence_detectors.is_empty() {
-                                    motion_detectors.push(MotionDetector::Switch {
-                                        input: presence_detectors,
-                                        output: register,
-                                        switch_off_time: auto_switch_off_time,
-                                    });
-                                }
-                            } else {
-                                dual_input_switches.push(DualInputSwitch {
-                                    input: manual_buttons,
-                                    output: register,
-                                    auto_switch_off_time,
-                                    presence: presence_detectors,
-                                });
-                            }
-                        }
-                        LightTemplateTypes::Dimm => {
-                            let register = BrightnessKey::Light(DeviceInRoom {
-                                room: light_row.room,
-                                idx: light_row.device_id_in_room.unwrap(),
-                            });
-                            dmx_bricklet_settings.push(DmxConfigEntry::Dimm {
-                                register,
-                                channel: light_row.bus_start_address,
-                            });
-                            if manual_buttons.is_empty() {
-                                if !presence_detectors.is_empty() {
-                                    motion_detectors.push(MotionDetector::Dimmer {
-                                        input: presence_detectors,
-                                        output: register,
-                                        brightness: None,
-                                        switch_off_time: auto_switch_off_time,
-                                    });
-                                }
-                            } else {
-                                dual_input_dimmers.push(DualInputDimmer {
-                                    input: manual_buttons,
-                                    output: register,
-                                    auto_switch_off_time,
-                                    presence: presence_detectors,
-                                })
-                            }
-                        }
-                        LightTemplateTypes::DimmWhitebalance {
-                            warm_temperature,
-                            cold_temperature,
-                        } => {
-                            let brightness_register = BrightnessKey::Light(DeviceInRoom {
-                                room: light_row.room,
-                                idx: light_row.device_id_in_room.unwrap(),
-                            });
-                            let whitebalance_register = LightColorKey::Light(DeviceInRoom {
-                                room: light_row.room,
-                                idx: light_row.device_id_in_room.unwrap(),
-                            });
-                            dmx_bricklet_settings.push(DmxConfigEntry::DimmWhitebalance {
-                                brightness_register,
-                                whitebalance_register,
-                                warm_channel: light_row.bus_start_address,
-                                cold_channel: light_row.bus_start_address + 1,
-                                warm_mireds: *warm_temperature,
-                                cold_mireds: *cold_temperature,
-                            });
-                            if manual_buttons.is_empty() {
-                                if !presence_detectors.is_empty() {
-                                    motion_detectors.push(MotionDetector::Dimmer {
-                                        input: presence_detectors,
-                                        output: brightness_register,
-                                        brightness: None,
-                                        switch_off_time: auto_switch_off_time,
-                                    });
-                                }
-                            } else {
-                                dual_input_dimmers.push(DualInputDimmer {
-                                    input: manual_buttons,
-                                    output: brightness_register,
-                                    auto_switch_off_time,
-                                    presence: presence_detectors,
-                                });
-                            }
-                        }
-                    }
-                }
-            }
-        }
+        let mut heat_outputs = HashMap::new();
+        let mut touchscreen_whitebalances = HashMap::new();
+        let mut touchscreen_brightness = HashMap::new();
+        parse_buttons(
+            config,
+            button_templates,
+            button_config,
+            &spreadsheet_methods,
+            &sheet,
+            &mut io_bricklets,
+            &mut single_button_adresses,
+            &mut dual_button_adresses,
+        )
+        .await?;
+        parse_controllers(
+            config,
+            &spreadsheet_methods,
+            &sheet,
+            &mut lcd_screens,
+            &mut temperature_sensors,
+            &mut heat_controllers,
+            &mut heat_outputs,
+            &mut touchscreen_whitebalances,
+            &mut touchscreen_brightness,
+        )
+        .await?;
+        parse_lights(
+            config,
+            light_templates,
+            light_config,
+            &spreadsheet_methods,
+            &sheet,
+            &mut dmx_bricklets,
+            &mut dual_input_dimmers,
+            &mut dual_input_switches,
+            &mut motion_detectors,
+            &mut single_button_adresses,
+            &mut dual_button_adresses,
+            &mut touchscreen_whitebalances,
+            &mut touchscreen_brightness,
+        )
+        .await?;
         Some(Wiring {
             controllers: Controllers {
                 dual_input_dimmers: dual_input_dimmers.into_boxed_slice(),
                 dual_input_switches: dual_input_switches.into_boxed_slice(),
                 motion_detectors: motion_detectors.into_boxed_slice(),
+                heat_controllers: heat_controllers.into_boxed_slice(),
             },
             tinkerforge_devices: TinkerforgeDevices {
-                lcd_screens: Default::default(),
+                lcd_screens,
                 dmx_bricklets: dmx_bricklets
                     .into_iter()
                     .map(|(uid, settings)| {
@@ -669,13 +223,778 @@ pub async fn read_sheet_data() -> Result<Option<Wiring>, GoogleDataError> {
                     .collect(),
                 motion_detectors: Default::default(),
                 relays: Default::default(),
-                temperature_sensors: Default::default(),
+                temperature_sensors,
             },
         })
     } else {
         None
     };
     Ok(x)
+}
+
+async fn parse_controllers<'a>(
+    config: &GoogleSheet,
+    spreadsheet_methods: &SpreadsheetMethods<'_, HttpsConnector<HttpConnector>>,
+    sheet: &'a Spreadsheet,
+    lcd_screens: &mut HashMap<Uid, ScreenSettings>,
+    temperature_sensors: &mut HashMap<Uid, TemperatureSettings>,
+    heat_controllers: &mut Vec<HeatController>,
+    heat_outputs: &mut HashMap<&'a str, SwitchOutputKey>,
+    touchscreen_whitebalances: &mut HashMap<&'a str, LightColorKey>,
+    touchscreen_brightness: &mut HashMap<&'a str, BrightnessKey>,
+) -> Result<(), GoogleDataError> {
+    struct ControllerRow<'a> {
+        room: Room,
+        id: &'a str,
+        idx: Option<u16>,
+        orientation: Orientation,
+        touchscreen: Option<Uid>,
+        temp_sensor: Option<Uid>,
+        enable_heatcontrol: bool,
+        enable_whitebalance_control: bool,
+        enable_brighness_control: bool,
+    }
+    impl<'a> DeviceIdxAccess for ControllerRow<'a> {
+        fn existing_id(&self) -> Option<u16> {
+            self.idx
+        }
+
+        fn update_id(&mut self, id: u16) {
+            self.idx = Some(id)
+        }
+    }
+    let controllers = config.room_controllers();
+
+    if let Some(controller_grid) = find_sheet_by_name(sheet, controllers.sheet()) {
+        let (start_row, start_column, mut rows) = get_grid_and_coordinates(controller_grid);
+        if let Some((_, header)) = rows.next() {
+            let [room_column, id_column, index_column, orientation_column, touchscreen_column, temperature_column, heat_control_column, whitebalance_control_column, brightness_control_column] =
+                parse_headers(
+                    header,
+                    [
+                        controllers.room_id(),
+                        controllers.controller_id(),
+                        controllers.controller_idx(),
+                        controllers.orientation(),
+                        controllers.touchscreen_device_address(),
+                        controllers.temperature_device_address(),
+                        controllers.enable_heat_control(),
+                        controllers.enable_whitebalance_control(),
+                        controllers.enable_brightness_control(),
+                    ],
+                )
+                .map_err(GoogleDataError::ControllerHeader)?;
+
+            let mut device_ids_of_rooms = HashMap::<_, Vec<_>>::new();
+            for (row_idx, row) in rows {
+                if let (
+                    Some(room),
+                    Some(controller_id),
+                    idx,
+                    Some(orientation),
+                    touchscreen,
+                    temp_sensor,
+                    enable_heatcontrol,
+                    enable_whitebalance_control,
+                    enable_brighness_control,
+                ) = (
+                    get_cell_content(row, room_column)
+                        .map(Room::from_str)
+                        .and_then(Result::ok),
+                    get_cell_content(row, id_column),
+                    get_cell_integer(row, index_column).map(|v| v as u16),
+                    get_cell_content(row, orientation_column)
+                        .map(|v| Orientation::deserialize(Value::String(v.to_string())))
+                        .and_then(Result::ok),
+                    get_cell_content(row, touchscreen_column)
+                        .map(Uid::from_str)
+                        .and_then(Result::ok),
+                    get_cell_content(row, temperature_column)
+                        .map(Uid::from_str)
+                        .and_then(Result::ok),
+                    get_cell_content(row, heat_control_column)
+                        .map(|v| !v.is_empty())
+                        .unwrap_or(false),
+                    get_cell_content(row, whitebalance_control_column)
+                        .map(|v| !v.is_empty())
+                        .unwrap_or(false),
+                    get_cell_content(row, brightness_control_column)
+                        .map(|v| !v.is_empty())
+                        .unwrap_or(false),
+                ) {
+                    let row = row_idx + start_row;
+                    let col = index_column + start_column;
+                    device_ids_of_rooms.entry(room).or_default().push((
+                        CellCoordinates { row, col },
+                        ControllerRow {
+                            room,
+                            id: controller_id,
+                            idx,
+                            orientation,
+                            touchscreen,
+                            temp_sensor,
+                            enable_heatcontrol,
+                            enable_whitebalance_control,
+                            enable_brighness_control,
+                        },
+                    ));
+                }
+            }
+            let controller_rows = adjust_device_idx(
+                config,
+                spreadsheet_methods,
+                device_ids_of_rooms,
+                controllers.sheet(),
+            )
+            .await?;
+            for row in controller_rows {
+                let device_idx = DeviceInRoom {
+                    room: row.room,
+                    idx: row.idx.unwrap(),
+                };
+                let current_temperature_key = if let Some(uid) = row.temp_sensor {
+                    let output = TemperatureKey::CurrentTemperature(device_idx);
+                    temperature_sensors.insert(uid, TemperatureSettings { output });
+                    Some(output)
+                } else {
+                    None
+                };
+                let adjust_temperature_key = if row.enable_heatcontrol {
+                    if let Some(current_value_input) = current_temperature_key {
+                        let target_value_input = TemperatureKey::TargetTemperature(device_idx);
+                        let output = SwitchOutputKey::Heat(device_idx);
+                        heat_controllers.push(HeatController {
+                            current_value_input,
+                            target_value_input,
+                            output,
+                        });
+                        heat_outputs.insert(row.id, output);
+                        Some(target_value_input)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+                let light_color_key = if row.enable_whitebalance_control {
+                    let key = LightColorKey::TouchscreenController(device_idx);
+                    touchscreen_whitebalances.insert(row.id, key);
+                    Some(key)
+                } else {
+                    None
+                };
+                let brightness_key = if row.enable_brighness_control {
+                    let key = BrightnessKey::TouchscreenController(device_idx);
+                    touchscreen_brightness.insert(row.id, key);
+                    Some(key)
+                } else {
+                    None
+                };
+                if let Some(uid) = row.touchscreen {
+                    lcd_screens.insert(
+                        uid,
+                        ScreenSettings {
+                            orientation: row.orientation,
+                            clock_key: Some(ClockKey::MinuteClock),
+                            current_temperature_key,
+                            adjust_temperature_key,
+                            light_color_key,
+                            brightness_key,
+                        },
+                    );
+                }
+            }
+        }
+    }
+    Ok(())
+}
+async fn parse_lights<'a>(
+    config: &GoogleSheet,
+    light_templates: &GoogleLightTemplateData,
+    light_config: &GoogleLightData,
+    spreadsheet_methods: &SpreadsheetMethods<'_, HttpsConnector<HttpConnector>>,
+    sheet: &'a Spreadsheet,
+    dmx_bricklets: &mut HashMap<Uid, Vec<DmxConfigEntry>>,
+    dual_input_dimmers: &mut Vec<DualInputDimmer>,
+    dual_input_switches: &mut Vec<DualInputSwitch>,
+    motion_detectors: &mut Vec<MotionDetector>,
+    single_button_adresses: &mut HashMap<Cow<'a, str>, SingleButtonKey>,
+    dual_button_adresses: &mut HashMap<Cow<'a, str>, DualButtonKey>,
+    touchscreen_whitebalances: &mut HashMap<&'a str, LightColorKey>,
+    touchscreen_brightness: &mut HashMap<&'a str, BrightnessKey>,
+) -> Result<(), GoogleDataError> {
+    let mut light_template_map = HashMap::new();
+    if let Some(light_templates_grid) = find_sheet_by_name(sheet, light_templates.sheet()) {
+        let (_, _, mut rows) = get_grid_and_coordinates(light_templates_grid);
+        if let Some((_, header)) = rows.next() {
+            let [name_column, discriminator_column, warm_column, cold_column] = parse_headers(
+                header,
+                [
+                    light_templates.name_column(),
+                    light_templates.discriminator_column(),
+                    light_templates.temperature_warm_column(),
+                    light_templates.temperature_cold_column(),
+                ],
+            )
+            .map_err(GoogleDataError::LightTemplateHeader)?;
+            for (_, row) in rows {
+                if let (Some(name), Some(discriminator)) = (
+                    get_cell_content(&row, name_column),
+                    get_cell_content(&row, discriminator_column),
+                ) {
+                    if discriminator == "Switch" {
+                        light_template_map.insert(name, LightTemplateTypes::Switch);
+                    }
+                    if discriminator == "Dimm" {
+                        light_template_map.insert(name, LightTemplateTypes::Dimm);
+                    }
+                    if discriminator == "DimmWhitebalance" {
+                        if let (Some(warm_temperature), Some(cold_temperature)) = (
+                            get_cell_integer(&row, warm_column),
+                            get_cell_integer(&row, cold_column),
+                        ) {
+                            light_template_map.insert(
+                                name,
+                                LightTemplateTypes::DimmWhitebalance {
+                                    warm_temperature: kelvin_2_mireds(warm_temperature as u16),
+                                    cold_temperature: kelvin_2_mireds(cold_temperature as u16),
+                                },
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if let Some(light_grid) = find_sheet_by_name(&sheet, light_config.sheet()) {
+        struct LightRowContent<'a> {
+            room: Room,
+            light_template: &'a LightTemplateTypes,
+            device_id: &'a str,
+            device_id_in_room: Option<u16>,
+            device_address: Uid,
+            bus_start_address: u16,
+            manual_buttons: Box<[&'a str]>,
+            presence_detectors: Box<[&'a str]>,
+            touchscreen_whitebalance: Option<&'a str>,
+            touchscreen_brightness: Option<&'a str>,
+        }
+        impl<'a> DeviceIdxAccess for LightRowContent<'a> {
+            fn existing_id(&self) -> Option<u16> {
+                self.device_id_in_room
+            }
+
+            fn update_id(&mut self, id: u16) {
+                self.device_id_in_room = Some(id);
+            }
+        }
+
+        let (start_row, start_column, mut rows) = get_grid_and_coordinates(light_grid);
+        if let Some((_, header)) = rows.next() {
+            let [room_column, light_id_column, light_idx_column, template_column, device_address_column, bus_start_address_column, touchscreen_whitebalance_column, touchscreen_brightness_column] =
+                parse_headers(
+                    header,
+                    [
+                        light_config.room_id(),
+                        light_config.light_id(),
+                        light_config.light_idx(),
+                        light_config.template(),
+                        light_config.device_address(),
+                        light_config.bus_start_address(),
+                        light_config.touchscreen_whitebalance(),
+                        light_config.touchscreen_brightness(),
+                    ],
+                )
+                .map_err(GoogleDataError::LightHeader)?;
+            let manual_button_columns = parse_dynamic_headers(
+                header,
+                &light_config
+                    .manual_buttons()
+                    .iter()
+                    .map(|c| c.as_ref())
+                    .collect::<Vec<_>>(),
+            )
+            .map_err(GoogleDataError::LightHeader)?;
+            let presence_detector_columns = parse_dynamic_headers(
+                header,
+                &light_config
+                    .presence_detectors()
+                    .iter()
+                    .map(|c| c.as_ref())
+                    .collect::<Vec<_>>(),
+            )
+            .map_err(GoogleDataError::LightHeader)?;
+            let mut device_ids_of_rooms = HashMap::<_, Vec<_>>::new();
+            for (row_idx, row) in rows {
+                if let (
+                    Some(room),
+                    device_id_in_room,
+                    Some(device_id),
+                    Some(light_template),
+                    Some(device_address),
+                    Some(bus_start_address),
+                    manual_buttons,
+                    presence_detectors,
+                    touchscreen_whitebalance,
+                    touchscreen_brightness,
+                ) = (
+                    get_cell_content(row, room_column)
+                        .map(Room::from_str)
+                        .and_then(Result::ok),
+                    get_cell_integer(row, light_idx_column).map(|id| id as u16),
+                    get_cell_content(row, light_id_column),
+                    get_cell_content(row, template_column).and_then(|t| light_template_map.get(t)),
+                    get_cell_content(row, device_address_column)
+                        .map(Uid::from_str)
+                        .and_then(Result::ok),
+                    get_cell_integer(row, bus_start_address_column),
+                    manual_button_columns
+                        .iter()
+                        .filter_map(|id| get_cell_content(row, *id))
+                        .filter(|s| !s.is_empty())
+                        .collect::<Vec<_>>()
+                        .into_boxed_slice(),
+                    presence_detector_columns
+                        .iter()
+                        .filter_map(|id| get_cell_content(row, *id))
+                        .filter(|s| !s.is_empty())
+                        .collect::<Vec<_>>()
+                        .into_boxed_slice(),
+                    get_cell_content(row, touchscreen_whitebalance_column),
+                    get_cell_content(row, touchscreen_brightness_column),
+                ) {
+                    let row = row_idx + start_row;
+                    let col = light_idx_column + start_column;
+                    let coordinates = CellCoordinates { row, col };
+                    device_ids_of_rooms.entry(room).or_default().push((
+                        coordinates,
+                        LightRowContent {
+                            room,
+                            light_template,
+                            device_id,
+                            device_id_in_room,
+                            device_address,
+                            bus_start_address: bus_start_address as u16,
+                            manual_buttons,
+                            presence_detectors,
+                            touchscreen_whitebalance,
+                            touchscreen_brightness,
+                        },
+                    ));
+                    //info!("Room: {room:?}, idx: {coordinates}");
+                }
+            }
+            let sheet_name = light_config.sheet();
+
+            let light_device_rows =
+                adjust_device_idx(config, spreadsheet_methods, device_ids_of_rooms, sheet_name)
+                    .await?;
+            for light_row in light_device_rows {
+                let dmx_bricklet_settings =
+                    dmx_bricklets.entry(light_row.device_address).or_default();
+                let template = light_row.light_template;
+
+                let manual_buttons = light_row
+                    .manual_buttons
+                    .iter()
+                    .flat_map(|name| dual_button_adresses.get(*name))
+                    .copied()
+                    .collect::<Vec<_>>()
+                    .into_boxed_slice();
+                let presence_detectors = light_row
+                    .presence_detectors
+                    .iter()
+                    .flat_map(|name| single_button_adresses.get(*name))
+                    .copied()
+                    .collect::<Vec<_>>()
+                    .into_boxed_slice();
+                let auto_switch_off_time = if manual_buttons.is_empty() {
+                    Duration::from_secs(2 * 60)
+                } else if presence_detectors.is_empty() {
+                    Duration::from_secs(2 * 3600)
+                } else {
+                    Duration::from_secs(3600)
+                };
+                match template {
+                    LightTemplateTypes::Switch => {
+                        let register = SwitchOutputKey::Light(DeviceInRoom {
+                            room: light_row.room,
+                            idx: light_row.device_id_in_room.unwrap(),
+                        });
+                        dmx_bricklet_settings.push(DmxConfigEntry::Switch {
+                            register,
+                            channel: light_row.bus_start_address,
+                        });
+                        if manual_buttons.is_empty() {
+                            if !presence_detectors.is_empty() {
+                                motion_detectors.push(MotionDetector::Switch {
+                                    input: presence_detectors,
+                                    output: register,
+                                    switch_off_time: auto_switch_off_time,
+                                });
+                            }
+                        } else {
+                            dual_input_switches.push(DualInputSwitch {
+                                input: manual_buttons,
+                                output: register,
+                                auto_switch_off_time,
+                                presence: presence_detectors,
+                            });
+                        }
+                    }
+                    LightTemplateTypes::Dimm => {
+                        let register = BrightnessKey::Light(DeviceInRoom {
+                            room: light_row.room,
+                            idx: light_row.device_id_in_room.unwrap(),
+                        });
+                        dmx_bricklet_settings.push(DmxConfigEntry::Dimm {
+                            register,
+                            channel: light_row.bus_start_address,
+                        });
+                        if manual_buttons.is_empty() {
+                            if !presence_detectors.is_empty() {
+                                motion_detectors.push(MotionDetector::Dimmer {
+                                    input: presence_detectors,
+                                    output: register,
+                                    brightness: light_row
+                                        .touchscreen_brightness
+                                        .and_then(|k| touchscreen_brightness.get(k))
+                                        .copied(),
+                                    switch_off_time: auto_switch_off_time,
+                                });
+                            }
+                        } else {
+                            dual_input_dimmers.push(DualInputDimmer {
+                                input: manual_buttons,
+                                output: register,
+                                auto_switch_off_time,
+                                presence: presence_detectors,
+                            })
+                        }
+                    }
+                    LightTemplateTypes::DimmWhitebalance {
+                        warm_temperature,
+                        cold_temperature,
+                    } => {
+                        let brightness_register = if manual_buttons.is_empty() {
+                            light_row
+                                .touchscreen_brightness
+                                .and_then(|k| touchscreen_brightness.get(k))
+                                .copied()
+                        } else {
+                            None
+                        }
+                        .unwrap_or(BrightnessKey::Light(DeviceInRoom {
+                            room: light_row.room,
+                            idx: light_row.device_id_in_room.unwrap(),
+                        }));
+                        let whitebalance_register = if let Some(wb) = light_row
+                            .touchscreen_whitebalance
+                            .and_then(|k| touchscreen_whitebalances.get(k))
+                        {
+                            *wb
+                        } else {
+                            LightColorKey::Light(DeviceInRoom {
+                                room: light_row.room,
+                                idx: light_row.device_id_in_room.unwrap(),
+                            })
+                        };
+                        dmx_bricklet_settings.push(DmxConfigEntry::DimmWhitebalance {
+                            brightness_register,
+                            whitebalance_register,
+                            warm_channel: light_row.bus_start_address,
+                            cold_channel: light_row.bus_start_address + 1,
+                            warm_mireds: *warm_temperature,
+                            cold_mireds: *cold_temperature,
+                        });
+                        if manual_buttons.is_empty() {
+                            if !presence_detectors.is_empty() {
+                                motion_detectors.push(MotionDetector::Dimmer {
+                                    input: presence_detectors,
+                                    output: brightness_register,
+                                    brightness: light_row
+                                        .touchscreen_brightness
+                                        .and_then(|k| touchscreen_brightness.get(k))
+                                        .copied(),
+                                    switch_off_time: auto_switch_off_time,
+                                });
+                            }
+                        } else {
+                            dual_input_dimmers.push(DualInputDimmer {
+                                input: manual_buttons,
+                                output: brightness_register,
+                                auto_switch_off_time,
+                                presence: presence_detectors,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+trait DeviceIdxAccess {
+    fn existing_id(&self) -> Option<u16>;
+    fn update_id(&mut self, id: u16);
+}
+async fn adjust_device_idx<R: DeviceIdxAccess>(
+    config: &GoogleSheet,
+    spreadsheet_methods: &SpreadsheetMethods<'_, HttpsConnector<HttpConnector>>,
+    device_ids_of_rooms: HashMap<Room, Vec<(CellCoordinates, R)>>,
+    sheet_name: &str,
+) -> Result<Vec<R>, GoogleDataError> {
+    let mut updates = Vec::new();
+    let mut device_rows = Vec::new();
+    for (devices) in device_ids_of_rooms.into_values() {
+        let mut occupied_ids = HashSet::new();
+        let mut remaining_devices = Vec::with_capacity(devices.len());
+        for (coordinates, row) in devices {
+            if if let Some(id) = row.existing_id() {
+                if occupied_ids.contains(&id) {
+                    true
+                } else {
+                    occupied_ids.insert(id);
+                    false
+                }
+            } else {
+                true
+            } {
+                remaining_devices.push((coordinates, row));
+            } else {
+                device_rows.push(row);
+            };
+        }
+        let mut next_id = 0;
+        for (coordinates, mut row) in remaining_devices {
+            while occupied_ids.contains(&next_id) {
+                next_id += 1;
+            }
+            row.update_id(next_id);
+            device_rows.push(row);
+            updates.push(ValueRange {
+                major_dimension: None,
+                range: Some(format!("{}!{}", sheet_name, coordinates)),
+                values: Some(vec![vec![next_id.into()]]),
+            });
+            next_id += 1;
+        }
+    }
+    if !updates.is_empty() {
+        let update = BatchUpdateValuesRequest {
+            data: Some(updates),
+            include_values_in_response: None,
+            response_date_time_render_option: None,
+            response_value_render_option: None,
+            value_input_option: Some("RAW".to_string()),
+        };
+        spreadsheet_methods
+            .values_batch_update(update, config.spreadsheet_id())
+            .doit()
+            .await?;
+    }
+    Ok(device_rows)
+}
+
+async fn parse_buttons<'a>(
+    config: &GoogleSheet,
+    button_templates: &GoogleButtonTemplate,
+    button_config: &GoogleButtonData,
+    spreadsheet_methods: &SpreadsheetMethods<'_, HttpsConnector<HttpConnector>>,
+    sheet: &'a Spreadsheet,
+    io_bricklets: &mut HashMap<Uid, Vec<ButtonSetting>>,
+    single_button_adresses: &mut HashMap<Cow<'a, str>, SingleButtonKey>,
+    dual_button_adresses: &mut HashMap<Cow<'a, str>, DualButtonKey>,
+) -> Result<(), GoogleDataError> {
+    let mut button_template_map = HashMap::new();
+
+    if let Some(button_templates_grid) = find_sheet_by_name(&sheet, button_templates.sheet()) {
+        let (_, _, mut rows) = get_grid_and_coordinates(button_templates_grid);
+        if let Some((_, header)) = rows.next() {
+            let [name_column, sub_device_column, discriminiator_column] = parse_headers(
+                header,
+                [
+                    button_templates.name(),
+                    button_templates.sub_devices(),
+                    button_templates.discriminator(),
+                ],
+            )
+            .map_err(GoogleDataError::ButtonTemplateHeader)?;
+            for (_, row) in rows {
+                if let (Some(name), Some(sub_devices), Some(discriminator)) = (
+                    get_cell_content(row, name_column),
+                    get_cell_content(row, sub_device_column),
+                    get_cell_content(row, discriminiator_column),
+                ) {
+                    let sub_devices = sub_devices
+                        .split(',')
+                        .collect::<Vec<_>>()
+                        .into_boxed_slice();
+                    if let Some(style) = if discriminator == "Single" {
+                        Some(ButtonStyle::Single)
+                    } else if discriminator == "Dual" {
+                        Some(ButtonStyle::Dual)
+                    } else {
+                        None
+                    } {
+                        button_template_map
+                            .insert(name, ButtonTemplateTypes { style, sub_devices });
+                    }
+                }
+            }
+        }
+    }
+    if let Some(button_grid) = find_sheet_by_name(&sheet, button_config.sheet()) {
+        struct ButtonRowContent<'a> {
+            room: Room,
+            button_template: &'a ButtonTemplateTypes<'a>,
+            button_id: &'a str,
+            button_id_in_room: Option<u16>,
+            device_address: Uid,
+            first_input_idx: u8,
+        }
+        let (start_row, start_column, mut rows) = get_grid_and_coordinates(button_grid);
+        if let Some((_, header)) = rows.next() {
+            let [room_column, button_id_column, button_idx_column, type_column, device_address_column, first_input_idx_column] =
+                parse_headers(
+                    header,
+                    [
+                        button_config.room_id(),
+                        button_config.button_id(),
+                        button_config.button_idx(),
+                        button_config.button_type(),
+                        button_config.device_address(),
+                        button_config.first_input_idx(),
+                    ],
+                )
+                .map_err(GoogleDataError::ButtonHeader)?;
+            let mut button_ids_of_rooms = HashMap::<_, Vec<_>>::new();
+            for (row_idx, row) in rows {
+                if let (
+                    Some(room),
+                    Some(button_id),
+                    button_id_in_room,
+                    Some(button_template),
+                    Some(device_address),
+                    Some(first_input_idx),
+                ) = (
+                    get_cell_content(row, room_column)
+                        .map(Room::from_str)
+                        .and_then(Result::ok),
+                    get_cell_content(row, button_id_column),
+                    get_cell_integer(row, button_idx_column).map(|id| id as u16),
+                    get_cell_content(row, type_column).and_then(|t| button_template_map.get(t)),
+                    get_cell_content(row, device_address_column)
+                        .map(Uid::from_str)
+                        .and_then(Result::ok),
+                    get_cell_integer(row, first_input_idx_column).map(|id| id as u8),
+                ) {
+                    let row = row_idx + start_row;
+                    let col = button_idx_column + start_column;
+                    let coordinates = CellCoordinates { row, col };
+                    button_ids_of_rooms.entry(room).or_default().push((
+                        coordinates,
+                        ButtonRowContent {
+                            room,
+                            button_template,
+                            button_id,
+                            button_id_in_room,
+                            device_address,
+                            first_input_idx,
+                        },
+                    ));
+                }
+            }
+            let mut updates = Vec::new();
+            let mut button_device_rows = Vec::new();
+            for (devices) in button_ids_of_rooms.into_values() {
+                let mut occupied_ids = HashSet::new();
+                let mut remaining_devices = Vec::with_capacity(devices.len());
+                for (coordinates, button_row) in devices {
+                    if if let Some(id) = button_row.button_id_in_room {
+                        if occupied_ids.contains(&id) {
+                            true
+                        } else {
+                            occupied_ids.insert(id);
+                            false
+                        }
+                    } else {
+                        true
+                    } {
+                        remaining_devices.push((coordinates, button_row));
+                    } else {
+                        button_device_rows.push(button_row);
+                    };
+                }
+                let mut next_id = 0;
+                for (coordinates, mut row) in remaining_devices {
+                    while occupied_ids.contains(&next_id) {
+                        next_id += 1;
+                    }
+                    row.button_id_in_room = Some(next_id);
+                    button_device_rows.push(row);
+                    updates.push(ValueRange {
+                        major_dimension: None,
+                        range: Some(format!("{}!{}", button_config.sheet(), coordinates)),
+                        values: Some(vec![vec![next_id.into()]]),
+                    });
+                    next_id += 1;
+                }
+            }
+            if !updates.is_empty() {
+                let update = BatchUpdateValuesRequest {
+                    data: Some(updates),
+                    include_values_in_response: None,
+                    response_date_time_render_option: None,
+                    response_value_render_option: None,
+                    value_input_option: Some("RAW".to_string()),
+                };
+                spreadsheet_methods
+                    .values_batch_update(update, config.spreadsheet_id())
+                    .doit()
+                    .await?;
+            }
+            for button_row in button_device_rows {
+                let io_bricklet_settings =
+                    io_bricklets.entry(button_row.device_address).or_default();
+                let mut current_input_idx = button_row.first_input_idx;
+                for (subdevice_id, subdevice_name) in
+                    button_row.button_template.sub_devices.iter().enumerate()
+                {
+                    let device_key =
+                        Cow::Owned(format!("{}, {}", button_row.button_id, subdevice_name));
+
+                    let sub_device_in_room = SubDeviceInRoom {
+                        room: button_row.room,
+                        device_idx: button_row.button_id_in_room.unwrap(),
+                        sub_device_idx: subdevice_id as u16,
+                    };
+                    match button_row.button_template.style {
+                        ButtonStyle::Single => {
+                            let output = SingleButtonKey(sub_device_in_room);
+                            io_bricklet_settings.push(ButtonSetting::Single {
+                                button: current_input_idx,
+                                output,
+                            });
+                            single_button_adresses.insert(device_key, output);
+                            current_input_idx += 1;
+                        }
+                        ButtonStyle::Dual => {
+                            let output = DualButtonKey(sub_device_in_room);
+                            io_bricklet_settings.push(ButtonSetting::Dual {
+                                up_button: current_input_idx + 1,
+                                down_button: current_input_idx,
+                                output,
+                            });
+                            dual_button_adresses.insert(device_key, output);
+                            current_input_idx += 2;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 fn find_sheet_by_name<'a>(sheet: &'a Spreadsheet, name_of_sheet: &str) -> Option<&'a GridData> {

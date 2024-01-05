@@ -1,8 +1,6 @@
-use std::iter::FilterMap;
 use std::{hash::Hash, num::Saturating, time::Duration};
 
 use futures::stream::SelectAll;
-use futures::SinkExt;
 use log::error;
 use tokio::{
     sync::mpsc::{self, error::SendError, Sender},
