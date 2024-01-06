@@ -146,7 +146,7 @@ impl Lcd128x64BrickletDisplay {
         self.bricklet
             .set_touch_position_callback_configuration(200, true)
             .await?;
-        let orientation = self.orientation.clone();
+        let orientation = self.orientation;
 
         Ok(self
             .bricklet

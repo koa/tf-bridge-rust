@@ -53,7 +53,7 @@ async fn quad_relay_task(
     while let Some(event) = stream.next().await {
         match event {
             RelayMsg::SetState(channel, state) => {
-                let mut new_value = current_value.clone();
+                let mut new_value = current_value;
                 new_value[channel as usize] = state;
                 if new_value != current_value {
                     current_value = new_value;

@@ -597,7 +597,7 @@ async fn parse_motion_detectors<'a>(
         }
     }
     let md_config = config.motion_detectors();
-    if let Some(motion_detector_grid) = find_sheet_by_name(&sheet, md_config.sheet()) {
+    if let Some(motion_detector_grid) = find_sheet_by_name(sheet, md_config.sheet()) {
         let (start_row, start_column, mut rows) = get_grid_and_coordinates(motion_detector_grid);
         if let Some((_, header)) = rows.next() {
             let [room_column, address_column, id_column, idx_column] = parse_headers(
@@ -684,8 +684,8 @@ async fn parse_lights<'a>(
             .map_err(GoogleDataError::LightTemplateHeader)?;
             for (_, row) in rows {
                 if let (Some(name), Some(discriminator)) = (
-                    get_cell_content(&row, name_column),
-                    get_cell_content(&row, discriminator_column),
+                    get_cell_content(row, name_column),
+                    get_cell_content(row, discriminator_column),
                 ) {
                     if discriminator == "Switch" {
                         light_template_map.insert(name, LightTemplateTypes::Switch);
@@ -695,8 +695,8 @@ async fn parse_lights<'a>(
                     }
                     if discriminator == "DimmWhitebalance" {
                         if let (Some(warm_temperature), Some(cold_temperature)) = (
-                            get_cell_integer(&row, warm_column),
-                            get_cell_integer(&row, cold_column),
+                            get_cell_integer(row, warm_column),
+                            get_cell_integer(row, cold_column),
                         ) {
                             light_template_map.insert(
                                 name,
@@ -712,7 +712,7 @@ async fn parse_lights<'a>(
         }
     }
     let light_config = config.light();
-    if let Some(light_grid) = find_sheet_by_name(&sheet, light_config.sheet()) {
+    if let Some(light_grid) = find_sheet_by_name(sheet, light_config.sheet()) {
         struct LightRowContent<'a> {
             room: Room,
             light_template: &'a LightTemplateTypes,
@@ -1045,7 +1045,7 @@ async fn parse_buttons<'a>(
 ) -> Result<(), GoogleDataError> {
     let mut button_template_map = HashMap::new();
 
-    if let Some(button_templates_grid) = find_sheet_by_name(&sheet, button_templates.sheet()) {
+    if let Some(button_templates_grid) = find_sheet_by_name(sheet, button_templates.sheet()) {
         let (_, _, mut rows) = get_grid_and_coordinates(button_templates_grid);
         if let Some((_, header)) = rows.next() {
             let [name_column, sub_device_column, discriminiator_column] = parse_headers(
@@ -1081,7 +1081,7 @@ async fn parse_buttons<'a>(
             }
         }
     }
-    if let Some(button_grid) = find_sheet_by_name(&sheet, button_config.sheet()) {
+    if let Some(button_grid) = find_sheet_by_name(sheet, button_config.sheet()) {
         struct ButtonRowContent<'a> {
             room: Room,
             button_template: &'a ButtonTemplateTypes<'a>,
@@ -1310,10 +1310,10 @@ fn parse_dynamic_headers(
     header_columns: &[&str],
 ) -> Result<Box<[usize]>, HeaderError> {
     let mut found_header_ids = vec![None; header_columns.len()].into_boxed_slice();
-    find_indizes_of_headers(row, &header_columns, &mut found_header_ids);
+    find_indizes_of_headers(row, header_columns, &mut found_header_ids);
     let mut missing_headers = Vec::with_capacity(header_columns.len());
     let mut ret = Vec::with_capacity(header_columns.len());
-    for (header_idx, col_idx) in found_header_ids.into_iter().enumerate() {
+    for (header_idx, col_idx) in found_header_ids.iter().enumerate() {
         if let Some(idx) = col_idx {
             ret.push(*idx);
         } else {

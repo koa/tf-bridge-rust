@@ -106,11 +106,11 @@ async fn io_16_v2_loop(
                 match channel_settings.get(channel as usize) {
                     None => {}
                     Some(ChannelSetting::DualButtonDown(sender)) => sender
-                        .send(ButtonState::ShortPressStart(DualButtonLayout::DOWN))
+                        .send(ButtonState::ShortPressStart(DualButtonLayout::Down))
                         .await
                         .map_err(IoHandlerError::DualButtonDown)?,
                     Some(ChannelSetting::DualButtonUp(sender)) => sender
-                        .send(ButtonState::ShortPressStart(DualButtonLayout::UP))
+                        .send(ButtonState::ShortPressStart(DualButtonLayout::Up))
                         .await
                         .map_err(IoHandlerError::DualButtonUp)?,
                     Some(ChannelSetting::None) => {}
@@ -140,11 +140,11 @@ async fn io_16_v2_loop(
                 match channel_settings.get(channel as usize) {
                     None => {}
                     Some(ChannelSetting::DualButtonDown(sender)) => sender
-                        .send(ButtonState::LongPressStart(DualButtonLayout::DOWN))
+                        .send(ButtonState::LongPressStart(DualButtonLayout::Down))
                         .await
                         .map_err(IoHandlerError::DualButtonDown)?,
                     Some(ChannelSetting::DualButtonUp(sender)) => sender
-                        .send(ButtonState::LongPressStart(DualButtonLayout::UP))
+                        .send(ButtonState::LongPressStart(DualButtonLayout::Up))
                         .await
                         .map_err(IoHandlerError::DualButtonUp)?,
                     Some(ChannelSetting::None) => {}

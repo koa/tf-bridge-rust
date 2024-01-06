@@ -266,7 +266,7 @@ async fn dual_input_dimmer_task(
             DimmerEvent::ButtonState(ButtonState::Released) => {
                 if !is_long_press {
                     match last_button {
-                        Some(DualButtonLayout::UP) => {
+                        Some(DualButtonLayout::Up) => {
                             if last_on_brightness.0 > 0 {
                                 current_brightness = last_on_brightness;
                             } else {
@@ -275,7 +275,7 @@ async fn dual_input_dimmer_task(
                             }
                             sender.send(current_brightness).await?;
                         }
-                        Some(DualButtonLayout::DOWN) => {
+                        Some(DualButtonLayout::Down) => {
                             current_brightness = Saturating(0);
                             sender.send(current_brightness).await?;
                         }
@@ -313,10 +313,10 @@ async fn dual_input_dimmer_task(
             }
             DimmerEvent::KeepPressing(button) => {
                 match button {
-                    DualButtonLayout::UP => {
+                    DualButtonLayout::Up => {
                         current_brightness += 1;
                     }
-                    DualButtonLayout::DOWN => {
+                    DualButtonLayout::Down => {
                         current_brightness -= 1;
                     }
                 }
@@ -352,8 +352,8 @@ async fn dual_input_switch_task(
         match event {
             DimmerEvent::ButtonState(ButtonState::ShortPressStart(button)) => {
                 current_state = match button {
-                    DualButtonLayout::UP => true,
-                    DualButtonLayout::DOWN => false,
+                    DualButtonLayout::Up => true,
+                    DualButtonLayout::Down => false,
                 };
                 sender.send(current_state).await?;
                 if current_state {

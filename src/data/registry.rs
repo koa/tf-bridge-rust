@@ -67,8 +67,8 @@ pub enum ButtonState<B: Copy + Clone + Eq + Hash> {
 }
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Serialize, Deserialize)]
 pub enum DualButtonLayout {
-    UP,
-    DOWN,
+    Up,
+    Down,
 }
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Default, Serialize, Deserialize)]
 pub struct SingleButtonLayout;
