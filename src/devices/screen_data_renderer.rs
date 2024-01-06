@@ -488,7 +488,7 @@ async fn screen_thread_loop(
     let mut screen = screen_data(
         update_temperature_sender.is_some(),
         update_color_sender.is_some(),
-        true,
+        update_brightness_sender.is_some(),
     );
     screen.draw(&mut display).expect("Infallible");
     display.draw().await?;

@@ -26,13 +26,12 @@ use crate::data::registry::{
     BrightnessKey, ClockKey, DualButtonKey, LightColorKey, SingleButtonKey, SwitchOutputKey,
     TemperatureKey,
 };
-use crate::data::settings::{
-    GoogleButtonData, GoogleButtonTemplate, GoogleLightData, GoogleLightTemplateData, GoogleSheet,
-};
+use crate::data::settings::{GoogleButtonData, GoogleButtonTemplate, GoogleSheet};
 use crate::data::wiring::{
     ButtonSetting, Controllers, DmxConfigEntry, DmxSettings, DualInputDimmer, DualInputSwitch,
     HeatController, IoSettings, MotionDetector, MotionDetectorSettings, Orientation,
-    ScreenSettings, TemperatureSettings, TinkerforgeDevices, Wiring,
+    RelayChannelEntry, RelaySettings, RingController, ScreenSettings, TemperatureSettings,
+    TinkerforgeDevices, Wiring,
 };
 use crate::data::{DeviceInRoom, SubDeviceInRoom, Uid};
 use crate::{
@@ -63,6 +62,8 @@ pub enum GoogleDataError {
     ControllerHeader(HeaderError),
     #[error("Error parsing motion detector header: {0}")]
     MotionDetectorHeader(HeaderError),
+    #[error("Error parsing relays header: {0}")]
+    RelayHeader(HeaderError),
 }
 
 enum LightTemplateTypes {
@@ -100,12 +101,13 @@ pub async fn read_sheet_data() -> Result<Option<Wiring>, GoogleDataError> {
 
         let hub = Sheets::new(client, auth);
 
-        let light_templates = config.light_templates();
+        let light_template_config = config.light_templates();
         let light_config = config.light();
-        let button_templates = config.button_templates();
+        let button_template_config = config.button_templates();
         let button_config = config.buttons();
-        let room_controllers = config.room_controllers();
-        let motion_detectors = config.motion_detectors();
+        let room_controller_config = config.room_controllers();
+        let motion_detector_config = config.motion_detectors();
+        let relays_config = config.relays();
 
         let spreadsheet_methods = hub.spreadsheets();
         let (_, sheet) = spreadsheet_methods
@@ -114,13 +116,13 @@ pub async fn read_sheet_data() -> Result<Option<Wiring>, GoogleDataError> {
             .include_grid_data(true)
             .add_ranges(&format!(
                 "{}!{}",
-                room_controllers.sheet(),
-                room_controllers.range()
+                room_controller_config.sheet(),
+                room_controller_config.range()
             ))
             .add_ranges(&format!(
                 "{}!{}",
-                motion_detectors.sheet(),
-                motion_detectors.range()
+                motion_detector_config.sheet(),
+                motion_detector_config.range()
             ))
             .add_ranges(&format!(
                 "{}!{}",
@@ -129,8 +131,8 @@ pub async fn read_sheet_data() -> Result<Option<Wiring>, GoogleDataError> {
             ))
             .add_ranges(&format!(
                 "{}!{}",
-                light_templates.sheet(),
-                light_templates.range()
+                light_template_config.sheet(),
+                light_template_config.range()
             ))
             .add_ranges(&format!(
                 "{}!{}",
@@ -139,8 +141,13 @@ pub async fn read_sheet_data() -> Result<Option<Wiring>, GoogleDataError> {
             ))
             .add_ranges(&format!(
                 "{}!{}",
-                button_templates.sheet(),
-                button_templates.range()
+                button_template_config.sheet(),
+                button_template_config.range()
+            ))
+            .add_ranges(&format!(
+                "{}!{}",
+                relays_config.sheet(),
+                relays_config.range()
             ))
             .doit()
             .await?;
@@ -149,21 +156,23 @@ pub async fn read_sheet_data() -> Result<Option<Wiring>, GoogleDataError> {
         let mut lcd_screens = HashMap::new();
         let mut temperature_sensors = HashMap::new();
         let mut motion_detector_sensors = HashMap::new();
+        let mut relays = HashMap::new();
 
         let mut dual_input_dimmers = Vec::new();
         let mut dual_input_switches = Vec::new();
         let mut motion_detectors = Vec::new();
         let mut heat_controllers = Vec::new();
+        let mut ring_controllers = Vec::new();
 
         let mut single_button_adresses = HashMap::new();
         let mut dual_button_adresses = HashMap::new();
-        let mut heat_outputs = HashMap::new();
-        let mut touchscreen_whitebalances = HashMap::new();
-        let mut touchscreen_brightness = HashMap::new();
+        let mut heat_outputs_addresses = HashMap::new();
+        let mut touchscreen_whitebalance_addresses = HashMap::new();
+        let mut touchscreen_brightness_addresses = HashMap::new();
         let mut motion_detector_adresses = HashMap::new();
         parse_buttons(
             config,
-            button_templates,
+            button_template_config,
             button_config,
             &spreadsheet_methods,
             &sheet,
@@ -187,15 +196,13 @@ pub async fn read_sheet_data() -> Result<Option<Wiring>, GoogleDataError> {
             &mut lcd_screens,
             &mut temperature_sensors,
             &mut heat_controllers,
-            &mut heat_outputs,
-            &mut touchscreen_whitebalances,
-            &mut touchscreen_brightness,
+            &mut heat_outputs_addresses,
+            &mut touchscreen_whitebalance_addresses,
+            &mut touchscreen_brightness_addresses,
         )
         .await?;
         parse_lights(
             config,
-            light_templates,
-            light_config,
             &spreadsheet_methods,
             &sheet,
             &mut dmx_bricklets,
@@ -204,9 +211,19 @@ pub async fn read_sheet_data() -> Result<Option<Wiring>, GoogleDataError> {
             &mut motion_detectors,
             &mut single_button_adresses,
             &mut dual_button_adresses,
-            &mut touchscreen_whitebalances,
-            &mut touchscreen_brightness,
+            &mut touchscreen_whitebalance_addresses,
+            &mut touchscreen_brightness_addresses,
             &mut motion_detector_adresses,
+        )
+        .await?;
+        parse_relays(
+            config,
+            &spreadsheet_methods,
+            &sheet,
+            &mut relays,
+            &mut ring_controllers,
+            &mut single_button_adresses,
+            &mut heat_outputs_addresses,
         )
         .await?;
         Some(Wiring {
@@ -215,6 +232,7 @@ pub async fn read_sheet_data() -> Result<Option<Wiring>, GoogleDataError> {
                 dual_input_switches: dual_input_switches.into_boxed_slice(),
                 motion_detectors: motion_detectors.into_boxed_slice(),
                 heat_controllers: heat_controllers.into_boxed_slice(),
+                ring_controllers: ring_controllers.into_boxed_slice(),
             },
             tinkerforge_devices: TinkerforgeDevices {
                 lcd_screens,
@@ -241,7 +259,7 @@ pub async fn read_sheet_data() -> Result<Option<Wiring>, GoogleDataError> {
                     })
                     .collect(),
                 motion_detectors: motion_detector_sensors,
-                relays: Default::default(),
+                relays,
                 temperature_sensors,
             },
         })
@@ -249,6 +267,139 @@ pub async fn read_sheet_data() -> Result<Option<Wiring>, GoogleDataError> {
         None
     };
     Ok(x)
+}
+
+async fn parse_relays<'a>(
+    config: &'a GoogleSheet,
+    spreadsheet_methods: &SpreadsheetMethods<'_, HttpsConnector<HttpConnector>>,
+    sheet: &Spreadsheet,
+    relays: &mut HashMap<Uid, RelaySettings>,
+    ring_controllers: &mut Vec<RingController>,
+    single_buttons: &mut HashMap<Cow<'a, str>, SingleButtonKey>,
+    heating_outputs: &mut HashMap<&str, SwitchOutputKey>,
+) -> Result<(), GoogleDataError> {
+    struct RingRow {
+        room: Room,
+        idx: Option<u16>,
+        ring_button: SingleButtonKey,
+        uid: Uid,
+        channel: u8,
+    }
+    impl DeviceIdxAccess for RingRow {
+        fn existing_id(&self) -> Option<u16> {
+            self.idx
+        }
+
+        fn update_id(&mut self, id: u16) {
+            self.idx = Some(id);
+        }
+    }
+    let mut relay_channels = HashMap::<_, Vec<_>>::new();
+    let relay_configs = config.relays();
+    if let Some(relay_grid) = find_sheet_by_name(sheet, relay_configs.sheet()) {
+        let (start_row, start_column, mut rows) = get_grid_and_coordinates(relay_grid);
+        if let Some((_, header)) = rows.next() {
+            let [room_id_column, id_column, idx_column, device_address_column, device_channel_column, temperature_column, ring_button_column] =
+                parse_headers(
+                    header,
+                    [
+                        relay_configs.room_id(),
+                        relay_configs.id(),
+                        relay_configs.idx(),
+                        relay_configs.device_address(),
+                        relay_configs.device_channel(),
+                        relay_configs.temperature_sensor(),
+                        relay_configs.ring_button(),
+                    ],
+                )
+                .map_err(GoogleDataError::RelayHeader)?;
+            let mut device_ids_of_rooms = HashMap::<_, Vec<_>>::new();
+            for (row_idx, row) in rows {
+                if let (
+                    Some(room),
+                    Some(id),
+                    idx,
+                    Some(uid),
+                    Some(channel),
+                    temperature,
+                    ring_button,
+                ) = (
+                    get_cell_content(row, room_id_column)
+                        .map(Room::from_str)
+                        .and_then(Result::ok),
+                    get_cell_content(row, id_column),
+                    get_cell_integer(row, idx_column).map(|v| v as u16),
+                    get_cell_content(row, device_address_column)
+                        .map(Uid::from_str)
+                        .and_then(Result::ok),
+                    get_cell_integer(row, device_channel_column).map(|v| v as u8),
+                    get_cell_content(row, temperature_column)
+                        .and_then(|k| heating_outputs.get(k))
+                        .copied(),
+                    get_cell_content(row, ring_button_column)
+                        .and_then(|k| single_buttons.get(k))
+                        .copied(),
+                ) {
+                    if let Some(temp_input) = temperature {
+                        relay_channels
+                            .entry(uid)
+                            .or_default()
+                            .push(RelayChannelEntry {
+                                channel,
+                                input: temp_input,
+                            });
+                    } else if let Some(ring_button) = ring_button {
+                        let row = row_idx + start_row;
+                        let col = idx_column + start_column;
+
+                        device_ids_of_rooms.entry(room).or_default().push((
+                            CellCoordinates { row, col },
+                            RingRow {
+                                uid,
+                                channel,
+                                room,
+                                idx,
+                                ring_button,
+                            },
+                        ));
+                    }
+                }
+            }
+            let ring_rows = adjust_device_idx(
+                config,
+                spreadsheet_methods,
+                device_ids_of_rooms,
+                relay_configs.sheet(),
+            )
+            .await?;
+            for row in ring_rows {
+                let index = SwitchOutputKey::Bell(DeviceInRoom {
+                    room: row.room,
+                    idx: row.idx.unwrap(),
+                });
+                ring_controllers.push(RingController {
+                    input: row.ring_button,
+                    output: index,
+                });
+                relay_channels
+                    .entry(row.uid)
+                    .or_default()
+                    .push(RelayChannelEntry {
+                        channel: row.channel,
+                        input: index,
+                    });
+            }
+        }
+    }
+    for (uid, channels) in relay_channels {
+        relays.insert(
+            uid,
+            RelaySettings {
+                entries: channels.into_boxed_slice(),
+            },
+        );
+    }
+    Ok(())
 }
 
 async fn parse_controllers<'a>(
@@ -509,8 +660,6 @@ async fn parse_motion_detectors<'a>(
 }
 async fn parse_lights<'a>(
     config: &GoogleSheet,
-    light_templates: &GoogleLightTemplateData,
-    light_config: &GoogleLightData,
     spreadsheet_methods: &SpreadsheetMethods<'_, HttpsConnector<HttpConnector>>,
     sheet: &'a Spreadsheet,
     dmx_bricklets: &mut HashMap<Uid, Vec<DmxConfigEntry>>,
@@ -523,6 +672,7 @@ async fn parse_lights<'a>(
     touchscreen_brightness: &mut HashMap<&'a str, BrightnessKey>,
     motion_detector_adresses: &mut HashMap<&'a str, SingleButtonKey>,
 ) -> Result<(), GoogleDataError> {
+    let light_templates = config.light_templates();
     let mut light_template_map = HashMap::new();
     if let Some(light_templates_grid) = find_sheet_by_name(sheet, light_templates.sheet()) {
         let (_, _, mut rows) = get_grid_and_coordinates(light_templates_grid);
@@ -566,6 +716,7 @@ async fn parse_lights<'a>(
             }
         }
     }
+    let light_config = config.light();
     if let Some(light_grid) = find_sheet_by_name(&sheet, light_config.sheet()) {
         struct LightRowContent<'a> {
             room: Room,

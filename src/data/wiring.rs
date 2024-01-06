@@ -22,6 +22,7 @@ pub struct Controllers {
     pub dual_input_switches: Box<[DualInputSwitch]>,
     pub motion_detectors: Box<[MotionDetector]>,
     pub heat_controllers: Box<[HeatController]>,
+    pub ring_controllers: Box<[RingController]>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -56,6 +57,11 @@ pub enum MotionDetector {
 pub struct HeatController {
     pub current_value_input: TemperatureKey,
     pub target_value_input: TemperatureKey,
+    pub output: SwitchOutputKey,
+}
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct RingController {
+    pub input: SingleButtonKey,
     pub output: SwitchOutputKey,
 }
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
@@ -135,8 +141,8 @@ pub struct RelaySettings {
 }
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub struct RelayChannelEntry {
-    channel: u8,
-    input: SwitchOutputKey,
+    pub channel: u8,
+    pub input: SwitchOutputKey,
 }
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub struct TemperatureSettings {
@@ -168,6 +174,7 @@ mod test {
                 dual_input_switches: Box::new([]),
                 motion_detectors: Box::new([]),
                 heat_controllers: Box::new([]),
+                ring_controllers: Box::new([]),
             },
             tinkerforge_devices: TinkerforgeDevices {
                 lcd_screens: Default::default(),

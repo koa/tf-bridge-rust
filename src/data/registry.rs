@@ -58,19 +58,19 @@ pub enum SingleButtonKey {
     Button(SubDeviceInRoom),
     MotionDetector(DeviceInRoom),
 }
-#[derive(Copy, Clone, Eq, PartialEq, Hash, Default, Debug)]
+#[derive(Copy, Clone, Eq, PartialEq, Hash, Default, Debug, Serialize, Deserialize)]
 pub enum ButtonState<B: Copy + Clone + Eq + Hash> {
     #[default]
     Released,
     ShortPressStart(B),
     LongPressStart(B),
 }
-#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
+#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Serialize, Deserialize)]
 pub enum DualButtonLayout {
     UP,
     DOWN,
 }
-#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Default)]
+#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Default, Serialize, Deserialize)]
 pub struct SingleButtonLayout;
 pub trait KeyAccess<K: TypedKey<Value = V>, V: Clone + Sync + Send + 'static> {
     async fn register_access<
@@ -113,8 +113,16 @@ impl KeyAccess<ClockKey, DateTime<Local>> for EventRegistry {
 }
 
  */
+#[derive(Clone, PartialEq, Serialize, Deserialize, Debug, Default)]
+pub struct ValueSnapshots {
+    temperatures: HashMap<TemperatureKey, f32>,
+    light_colors: HashMap<LightColorKey, u16>,
+    brightness: HashMap<BrightnessKey, u8>,
+    output_switch: HashMap<SwitchOutputKey, bool>,
+}
 
 struct InnerEventRegistry {
+    default_values: ValueSnapshots,
     clock_registers: HashMap<ClockKey, Register<DateTime<Local>>>,
     temperature_registers: HashMap<TemperatureKey, Register<f32>>,
     light_color_registers: HashMap<LightColorKey, Register<Saturating<u16>>>,
@@ -125,20 +133,60 @@ struct InnerEventRegistry {
 }
 
 impl InnerEventRegistry {
+    fn take_snapshot(&self) -> ValueSnapshots {
+        ValueSnapshots {
+            temperatures: self
+                .temperature_registers
+                .iter()
+                .map(|(key, register)| (*key, register.current_value()))
+                .collect(),
+            light_colors: self
+                .light_color_registers
+                .iter()
+                .map(|(key, register)| (*key, register.current_value().0))
+                .collect(),
+            brightness: self
+                .brightness_color
+                .iter()
+                .map(|(key, register)| (*key, register.current_value().0))
+                .collect(),
+            output_switch: self
+                .output_switch
+                .iter()
+                .map(|(key, register)| (*key, register.current_value()))
+                .collect(),
+        }
+    }
     fn temperature_register(&mut self, key: TemperatureKey) -> &mut Register<f32> {
-        self.temperature_registers
-            .entry(key)
-            .or_insert_with(|| Register::new(21.0))
+        self.temperature_registers.entry(key).or_insert_with(|| {
+            Register::new(
+                self.default_values
+                    .temperatures
+                    .get(&key)
+                    .copied()
+                    .unwrap_or(21.0),
+            )
+        })
     }
     fn light_color_register(&mut self, key: LightColorKey) -> &mut Register<Saturating<u16>> {
-        self.light_color_registers
-            .entry(key)
-            .or_insert_with(|| Register::new(Saturating(200)))
+        self.light_color_registers.entry(key).or_insert_with(|| {
+            Register::new(Saturating(
+                self.default_values
+                    .light_colors
+                    .get(&key)
+                    .copied()
+                    .unwrap_or(200),
+            ))
+        })
     }
     fn brightness_register(&mut self, key: BrightnessKey) -> &mut Register<Saturating<u8>> {
-        self.brightness_color
-            .entry(key)
-            .or_insert_with(|| Register::new(Saturating(128)))
+        self.brightness_color.entry(key).or_insert_with(|| {
+            let option = self.default_values.brightness.get(&key).copied();
+            Register::new(Saturating(option.unwrap_or(match key {
+                BrightnessKey::Light(_) => 0,
+                BrightnessKey::TouchscreenController(_) => 255,
+            })))
+        })
     }
     fn dual_button_register(
         &mut self,
@@ -154,7 +202,15 @@ impl InnerEventRegistry {
     }
 
     fn switch_register(&mut self, key: SwitchOutputKey) -> &mut Register<bool> {
-        self.output_switch.entry(key).or_default()
+        self.output_switch.entry(key).or_insert_with(|| {
+            Register::new(
+                self.default_values
+                    .output_switch
+                    .get(&key)
+                    .copied()
+                    .unwrap_or_default(),
+            )
+        })
     }
     fn clock(&mut self, clock_key: ClockKey) -> &mut Register<DateTime<Local>> {
         self.clock_registers
@@ -191,10 +247,13 @@ impl EventRegistry {
     // BroadcastStream::new(self.inner.lock().await.clock_receiver.resubscribe())
     //     .filter_map(|e| e.ok())
     //}
-    pub fn new() -> Self {
+    pub fn new(default_values: Option<ValueSnapshots>) -> Self {
         Self {
-            inner: Arc::new(Mutex::new(InnerEventRegistry::new())),
+            inner: Arc::new(Mutex::new(InnerEventRegistry::new(default_values))),
         }
+    }
+    pub async fn take_snapshot(&self) -> ValueSnapshots {
+        self.inner.lock().await.take_snapshot()
     }
     pub async fn clock(&self, key: ClockKey) -> impl Stream<Item = DateTime<Local>> {
         self.inner
@@ -327,8 +386,9 @@ impl EventRegistry {
 }
 
 impl InnerEventRegistry {
-    fn new() -> Self {
+    fn new(default_values: Option<ValueSnapshots>) -> Self {
         Self {
+            default_values: default_values.unwrap_or_default(),
             clock_registers: Default::default(),
             temperature_registers: Default::default(),
             light_color_registers: Default::default(),
@@ -337,5 +397,20 @@ impl InnerEventRegistry {
             buttons: Default::default(),
             output_switch: Default::default(),
         }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use crate::data::registry::{SwitchOutputKey, ValueSnapshots};
+
+    #[test]
+    fn test_serialize_snapshot() {
+        let mut snapshots = ValueSnapshots::default();
+        snapshots
+            .output_switch
+            .insert(SwitchOutputKey::Light(Default::default()), true);
+        let string = ron::to_string(&snapshots).unwrap();
+        println!("{string}");
     }
 }

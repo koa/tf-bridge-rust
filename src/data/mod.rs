@@ -1,3 +1,4 @@
+use log::info;
 use std::fmt::{Display, Formatter};
 use std::num::ParseIntError;
 use std::str::FromStr;
@@ -7,7 +8,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use thiserror::Error;
 use tinkerforge_async::base58::{u32_to_base58, Base58, Base58Error};
 
-mod google_data;
+pub(crate) mod google_data;
 mod register;
 pub mod registry;
 pub mod settings;

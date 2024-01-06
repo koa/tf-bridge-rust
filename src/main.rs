@@ -1,4 +1,4 @@
-use std::{collections::HashMap, error::Error, fmt::Debug, time::Duration};
+use std::{collections::HashMap, error::Error, fmt::Debug, sync::Arc, time::Duration};
 
 use actix_web::{get, App, HttpServer};
 use actix_web_prometheus::PrometheusMetricsBuilder;
@@ -10,6 +10,7 @@ use tinkerforge_async::{
     base58::Base58,
     dmx_bricklet::DmxBricklet,
     error::TinkerforgeError,
+    industrial_quad_relay_bricklet::IndustrialQuadRelayBricklet,
     io16_v2_bricklet::Io16V2Bricklet,
     ip_connection::{async_io::AsyncIpConnection, EnumerateResponse, EnumerationType},
     lcd_128x64_bricklet::Lcd128x64Bricklet,
@@ -19,25 +20,26 @@ use tinkerforge_async::{
 use tokio::{join, net::ToSocketAddrs, pin, sync::mpsc, task, task::JoinHandle, time::sleep};
 use tokio_stream::StreamExt;
 
-use crate::data::wiring::{
-    ButtonSetting, Controllers, DmxSettings, DualInputDimmer, TinkerforgeDevices, Wiring,
-};
 use crate::{
-    controller::light::dual_input_dimmer,
+    controller::light::{
+        dual_input_dimmer, dual_input_switch, motion_detector, motion_detector_dimmer,
+    },
     data::{
-        registry::{
-            BrightnessKey, ClockKey, DualButtonKey, EventRegistry, LightColorKey, SingleButtonKey,
-            TemperatureKey,
-        },
+        google_data::read_sheet_data,
+        registry::{BrightnessKey, DualButtonKey, EventRegistry, LightColorKey},
         settings::CONFIG,
-        wiring::{DmxConfigEntry, Orientation, ScreenSettings},
-        DeviceInRoom,
+        wiring::DmxConfigEntry,
+        wiring::{
+            Controllers, DmxSettings, DualInputDimmer, MotionDetector, TinkerforgeDevices, Wiring,
+        },
+        DeviceInRoom, Uid,
     },
     devices::{
         dmx_handler::handle_dmx, io_handler::handle_io16_v2,
-        motion_detector::handle_motion_detector, screen_data_renderer::start_screen_thread,
-        temperature::handle_temperature,
+        motion_detector::handle_motion_detector, relay::handle_quad_relay,
+        screen_data_renderer::start_screen_thread, temperature::handle_temperature,
     },
+    snapshot::{read_snapshot, write_snapshot},
     util::kelvin_2_mireds,
 };
 
@@ -83,15 +85,16 @@ enum TfBridgeError {
 async fn run_enumeration_listener<T: ToSocketAddrs>(
     addr: T,
     event_registry: EventRegistry,
+    tinkerforge_devices: Arc<TinkerforgeDevices>,
 ) -> Result<(), TfBridgeError> {
     let ipcon = AsyncIpConnection::new(addr).await?;
     // Enumerate
     let stream = ipcon.clone().enumerate().await?;
-    let mut running_threads: HashMap<u32, mpsc::Sender<()>> = HashMap::new();
+    let mut running_threads: HashMap<_, mpsc::Sender<()>> = HashMap::new();
     pin!(stream);
     while let Some(paket) = stream.next().await {
         //print_enumerate_response(&paket);
-        match paket.uid.base58_to_u32() {
+        match paket.uid.base58_to_u32().map(Into::<Uid>::into) {
             Ok(uid) => {
                 match paket.enumeration_type {
                     EnumerationType::Available | EnumerationType::Connected => {
@@ -115,112 +118,114 @@ async fn run_enumeration_listener<T: ToSocketAddrs>(
                                 println!();
                             }*/
                             Lcd128x64Bricklet::DEVICE_IDENTIFIER => {
-                                info!("Found LCD Device: {}", paket.uid);
-                                register_handle(
-                                    &mut running_threads,
-                                    uid,
-                                    start_screen_thread(
-                                        Lcd128x64Bricklet::new(uid, ipcon.clone()),
-                                        event_registry.clone(),
-                                        ScreenSettings {
-                                            orientation: Orientation::LeftDown,
-                                            clock_key: Some(ClockKey::MinuteClock),
-                                            current_temperature_key: Some(
-                                                TemperatureKey::CurrentTemperature(
-                                                    Default::default(),
-                                                ),
-                                            ),
-                                            adjust_temperature_key: Some(
-                                                TemperatureKey::TargetTemperature(
-                                                    Default::default(),
-                                                ),
-                                            ),
-                                            light_color_key: Some(LightColorKey::Light(
-                                                DeviceInRoom::default(),
-                                            )),
-                                            brightness_key: Some(BrightnessKey::Light(
-                                                Default::default(),
-                                            )),
-                                        },
+                                if let Some(screen_settings) =
+                                    tinkerforge_devices.lcd_screens.get(&uid)
+                                {
+                                    info!("Found LCD Device: {}", paket.uid);
+                                    register_handle(
+                                        &mut running_threads,
+                                        uid,
+                                        start_screen_thread(
+                                            Lcd128x64Bricklet::new(uid.into(), ipcon.clone()),
+                                            event_registry.clone(),
+                                            *screen_settings,
+                                        )
+                                        .await,
                                     )
-                                    .await,
-                                )
-                                .await;
+                                    .await;
+                                }
                             }
                             DmxBricklet::DEVICE_IDENTIFIER => {
-                                info!("Found DMX Bricklet: {}", paket.uid);
-                                register_handle(
-                                    &mut running_threads,
-                                    uid,
-                                    handle_dmx(
-                                        DmxBricklet::new(uid, ipcon.clone()),
-                                        event_registry.clone(),
-                                        &[
-                                            DmxConfigEntry::Dimm {
-                                                register: BrightnessKey::Light(Default::default()),
-                                                channel: 2,
-                                            },
-                                            DmxConfigEntry::DimmWhitebalance {
-                                                brightness_register: BrightnessKey::Light(
-                                                    Default::default(),
-                                                ),
-                                                whitebalance_register: LightColorKey::Light(
-                                                    Default::default(),
-                                                ),
-                                                warm_channel: 0,
-                                                cold_channel: 1,
-                                                warm_mireds: kelvin_2_mireds(2700),
-                                                cold_mireds: kelvin_2_mireds(7500),
-                                            },
-                                        ],
+                                if let Some(settings) = tinkerforge_devices.dmx_bricklets.get(&uid)
+                                {
+                                    info!("Found DMX Bricklet: {}", paket.uid);
+                                    register_handle(
+                                        &mut running_threads,
+                                        uid,
+                                        handle_dmx(
+                                            DmxBricklet::new(uid.into(), ipcon.clone()),
+                                            event_registry.clone(),
+                                            &settings.entries,
+                                        )
+                                        .await,
                                     )
-                                    .await,
-                                )
-                                .await;
+                                    .await;
+                                }
                             }
                             Io16V2Bricklet::DEVICE_IDENTIFIER => {
-                                info!("Found IO 16 Bricklet: {}", paket.uid);
-                                register_handle(
-                                    &mut running_threads,
-                                    uid,
-                                    handle_io16_v2(
-                                        Io16V2Bricklet::new(uid, ipcon.clone()),
-                                        event_registry.clone(),
-                                        &[ButtonSetting::Dual {
-                                            up_button: 7,
-                                            down_button: 6,
-                                            output: DualButtonKey(Default::default()),
-                                        }],
+                                if let Some(settings) = tinkerforge_devices.io_bricklets.get(&uid) {
+                                    info!("Found IO 16 Bricklet: {}", paket.uid);
+                                    register_handle(
+                                        &mut running_threads,
+                                        uid,
+                                        handle_io16_v2(
+                                            Io16V2Bricklet::new(uid.into(), ipcon.clone()),
+                                            event_registry.clone(),
+                                            &settings.entries,
+                                        )
+                                        .await,
                                     )
-                                    .await,
-                                )
-                                .await;
+                                    .await;
+                                }
                             }
                             MotionDetectorV2Bricklet::DEVICE_IDENTIFIER => {
-                                info!("Found Motion detector Bricklet: {}", paket.uid);
-                                register_handle(
-                                    &mut running_threads,
-                                    uid,
-                                    handle_motion_detector(
-                                        MotionDetectorV2Bricklet::new(uid, ipcon.clone()),
-                                        event_registry.clone(),
-                                        SingleButtonKey::MotionDetector(Default::default()),
-                                    ),
-                                )
-                                .await;
+                                if let Some(settings) =
+                                    tinkerforge_devices.motion_detectors.get(&uid)
+                                {
+                                    info!("Found Motion detector Bricklet: {}", paket.uid);
+                                    register_handle(
+                                        &mut running_threads,
+                                        uid,
+                                        handle_motion_detector(
+                                            MotionDetectorV2Bricklet::new(
+                                                uid.into(),
+                                                ipcon.clone(),
+                                            ),
+                                            event_registry.clone(),
+                                            settings.output,
+                                        ),
+                                    )
+                                    .await;
+                                }
                             }
                             TemperatureV2Bricklet::DEVICE_IDENTIFIER => {
-                                info!("Found Temperature Bricklet: {}", paket.uid);
-                                register_handle(
-                                    &mut running_threads,
-                                    uid,
-                                    handle_temperature(
-                                        TemperatureV2Bricklet::new(uid, ipcon.clone()),
-                                        event_registry.clone(),
-                                        TemperatureKey::CurrentTemperature(Default::default()),
-                                    ),
-                                )
-                                .await;
+                                if let Some(settings) =
+                                    tinkerforge_devices.temperature_sensors.get(&uid)
+                                {
+                                    info!(
+                                        "Found Temperature Bricklet: {}\n{:#?}",
+                                        paket.uid, settings
+                                    );
+                                    register_handle(
+                                        &mut running_threads,
+                                        uid,
+                                        handle_temperature(
+                                            TemperatureV2Bricklet::new(uid.into(), ipcon.clone()),
+                                            event_registry.clone(),
+                                            settings.output,
+                                        ),
+                                    )
+                                    .await;
+                                }
+                            }
+                            IndustrialQuadRelayBricklet::DEVICE_IDENTIFIER => {
+                                if let Some(settings) = tinkerforge_devices.relays.get(&uid) {
+                                    info!("Found Relay Bricklet: {}\n{:#?}", paket.uid, settings);
+                                    register_handle(
+                                        &mut running_threads,
+                                        uid,
+                                        handle_quad_relay(
+                                            IndustrialQuadRelayBricklet::new(
+                                                uid.into(),
+                                                ipcon.clone(),
+                                            ),
+                                            &event_registry,
+                                            &settings.entries,
+                                        )
+                                        .await,
+                                    )
+                                    .await;
+                                }
                             }
 
                             _ => {}
@@ -243,8 +248,8 @@ async fn run_enumeration_listener<T: ToSocketAddrs>(
 }
 
 async fn register_handle(
-    running_threads: &mut HashMap<u32, mpsc::Sender<()>>,
-    uid: u32,
+    running_threads: &mut HashMap<Uid, mpsc::Sender<()>>,
+    uid: Uid,
     abort_handle: mpsc::Sender<()>,
 ) {
     if let Some(old_handle) = running_threads.insert(uid, abort_handle) {
@@ -258,12 +263,19 @@ async fn register_handle(
 fn start_enumeration_listener<T: ToSocketAddrs + Clone + Debug + Send + Sync + 'static>(
     connection: T,
     event_registry: EventRegistry,
+    tinkerforge_devices: Arc<TinkerforgeDevices>,
 ) -> JoinHandle<()> {
     let connection = connection.clone();
     task::spawn(async move {
         let socket_str = format!("{connection:?}");
         loop {
-            match run_enumeration_listener(connection.clone(), event_registry.clone()).await {
+            match run_enumeration_listener(
+                connection.clone(),
+                event_registry.clone(),
+                tinkerforge_devices.clone(),
+            )
+            .await
+            {
                 Ok(_) => {
                     info!("{socket_str}: Closed");
                     break;
@@ -288,6 +300,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let bind_addr = CONFIG.server.bind_address();
     let mgmt_port = CONFIG.server.mgmt_port();
     let tinkerforge = &CONFIG.tinkerforge;
+    let state_file = CONFIG.server.state_file();
 
     let prometheus = PrometheusMetricsBuilder::new("")
         .endpoint("/metrics")
@@ -298,7 +311,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .workers(2)
         .run();
 
-    let event_registry = EventRegistry::new();
+    let initial_snapshot = read_snapshot(state_file).await.unwrap_or_else(|error| {
+        error!("Cannot load snapshot: {error}");
+        None
+    });
+
+    let event_registry = EventRegistry::new(initial_snapshot);
+
+    start_snapshot_thread(&event_registry, state_file);
 
     let wiring = Wiring {
         controllers: Controllers {
@@ -311,6 +331,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             dual_input_switches: Box::new([]),
             motion_detectors: Box::new([]),
             heat_controllers: Box::new([]),
+            ring_controllers: Box::new([]),
         },
         tinkerforge_devices: TinkerforgeDevices {
             lcd_screens: Default::default(),
@@ -349,7 +370,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
         },
     };
 
-    info!("Config: \n{}", serde_yaml::to_string(&wiring).unwrap());
+    let wiring = read_sheet_data().await.unwrap().unwrap();
+    //info!("Config: \n{}", serde_yaml::to_string(&wiring).unwrap());
 
     let mut debug_stream = event_registry
         .dual_button_stream(DualButtonKey(Default::default()))
@@ -359,8 +381,19 @@ async fn main() -> Result<(), Box<dyn Error>> {
             info!("Event: {event:?}")
         }
     });
+    let Wiring {
+        controllers:
+            Controllers {
+                dual_input_dimmers,
+                dual_input_switches,
+                motion_detectors,
+                heat_controllers,
+                ring_controllers,
+            },
+        tinkerforge_devices,
+    } = wiring;
 
-    for dimmer_cfg in wiring.controllers.dual_input_dimmers.iter() {
+    for dimmer_cfg in dual_input_dimmers.iter() {
         dual_input_dimmer(
             &event_registry,
             dimmer_cfg.input.as_ref(),
@@ -370,11 +403,47 @@ async fn main() -> Result<(), Box<dyn Error>> {
         )
         .await;
     }
+    for switch_cfg in dual_input_switches.iter() {
+        dual_input_switch(
+            &event_registry,
+            switch_cfg.input.as_ref(),
+            switch_cfg.output,
+            switch_cfg.auto_switch_off_time,
+            switch_cfg.presence.as_ref(),
+        )
+        .await;
+    }
+    for motion_detector_cfg in motion_detectors.iter() {
+        match motion_detector_cfg {
+            MotionDetector::Switch {
+                input,
+                output,
+                switch_off_time,
+            } => motion_detector(&event_registry, input.as_ref(), *output, *switch_off_time).await,
+            MotionDetector::Dimmer {
+                input,
+                output,
+                brightness,
+                switch_off_time,
+            } => {
+                motion_detector_dimmer(
+                    &event_registry,
+                    input.as_ref(),
+                    *brightness,
+                    *output,
+                    *switch_off_time,
+                )
+                .await
+            }
+        };
+    }
+    let tinkerforge_devices = Arc::new(tinkerforge_devices);
 
     for endpoint in tinkerforge.endpoints() {
         start_enumeration_listener(
             (endpoint.address(), endpoint.port()),
             event_registry.clone(),
+            tinkerforge_devices.clone(),
         );
     }
 
@@ -389,6 +458,29 @@ async fn main() -> Result<(), Box<dyn Error>> {
     join!(mgmt_server).0?;
     Ok(())
 }
+
+fn start_snapshot_thread(event_registry: &EventRegistry, state_file: &'static str) {
+    let event_registry = event_registry.clone();
+    tokio::spawn(async move {
+        let mut last_snapshot = Default::default();
+        loop {
+            sleep(Duration::from_secs(10)).await;
+            let snapshot = event_registry.take_snapshot().await;
+            if snapshot == last_snapshot {
+                continue;
+            }
+            match write_snapshot(&snapshot, state_file).await {
+                Ok(_) => {}
+                Err(error) => {
+                    error!("Cannot write snapshot: {error}");
+                }
+            }
+            last_snapshot = snapshot;
+        }
+    });
+}
+
+mod snapshot;
 
 fn dither<const N: usize>(input: &[f32; N]) -> Box<[bool; N]> {
     let mut current_error = 0.0;

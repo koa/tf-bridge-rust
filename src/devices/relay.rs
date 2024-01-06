@@ -1,3 +1,5 @@
+use chrono::format::Item;
+use futures::stream::SelectAll;
 use futures::{SinkExt, Stream};
 use log::error;
 use thiserror::Error;
@@ -11,27 +13,32 @@ use tokio_stream::wrappers::ReceiverStream;
 use tokio_stream::StreamExt;
 
 use crate::data::registry::{EventRegistry, SwitchOutputKey};
+use crate::data::wiring::RelayChannelEntry;
 use crate::util::optional_stream;
 
-pub fn handle_quad_releay(
+pub async fn handle_quad_relay(
     bricklet: IndustrialQuadRelayBricklet,
-    event_registry: EventRegistry,
-    inputs: [Option<SwitchOutputKey>; 4],
+    event_registry: &EventRegistry,
+    inputs: &[RelayChannelEntry],
 ) -> Sender<()> {
     let (tx, rx) = mpsc::channel(1);
+    let mut streams = SelectAll::new();
+    for channel_entry in inputs {
+        let channel = channel_entry.channel;
+        streams.push(
+            event_registry
+                .switch_stream(channel_entry.input)
+                .await
+                .map(move |state| RelayMsg::SetState(channel, state)),
+        );
+    }
+    let input_streams = streams.merge(ReceiverStream::new(rx).map(|_| RelayMsg::Closed));
     tokio::spawn(async move {
-        if let Err(error) = quad_relay_task(bricklet, event_registry, inputs, rx).await {
-            error!("Error processing temperature: {error}");
+        if let Err(error) = quad_relay_task(bricklet, input_streams).await {
+            error!("Error processing relay: {error}");
         }
     });
     tx
-}
-#[derive(Error, Debug)]
-enum RelayError {
-    #[error("Tinkerforge error: {0}")]
-    Tinkerforge(#[from] TinkerforgeError),
-    #[error("Send error: {0}")]
-    SendError(#[from] mpsc::error::SendError<f32>),
 }
 enum RelayMsg {
     SetState(u8, bool),
@@ -40,19 +47,11 @@ enum RelayMsg {
 }
 async fn quad_relay_task(
     mut bricklet: IndustrialQuadRelayBricklet,
-    event_registry: EventRegistry,
-    inputs: [Option<SwitchOutputKey>; 4],
-    termination_receiver: mpsc::Receiver<()>,
-) -> Result<(), RelayError> {
+    input_stream: impl Stream<Item = RelayMsg> + Unpin,
+) -> Result<(), TinkerforgeError> {
     let (tx, rx) = mpsc::channel(2);
 
-    let mut stream = relay_stream(&event_registry, inputs, 0)
-        .await
-        .merge(relay_stream(&event_registry, inputs, 1).await)
-        .merge(relay_stream(&event_registry, inputs, 2).await)
-        .merge(relay_stream(&event_registry, inputs, 3).await)
-        .merge(ReceiverStream::new(termination_receiver).map(|_| RelayMsg::Closed))
-        .merge(ReceiverStream::new(rx));
+    let mut stream = input_stream.merge(ReceiverStream::new(rx));
     let mut current_value = 0;
     let mut timer_handle = Some(start_send_timer(&tx));
     bricklet.set_monoflop(0x0f, 0, 0).await?;

@@ -41,7 +41,6 @@ impl<T: Clone + Sync + Send + 'static + PartialEq> Register<T> {
                 }
             }
         });
-
         Self { rx, tx, handle }
     }
     pub async fn stream(&self) -> impl Stream<Item = T> {
@@ -49,6 +48,9 @@ impl<T: Clone + Sync + Send + 'static + PartialEq> Register<T> {
     }
     pub fn sender(&self) -> mpsc::Sender<T> {
         self.tx.clone()
+    }
+    pub fn current_value(&self) -> T {
+        self.rx.borrow().clone()
     }
 }
 impl<T: Clone + Sync + Send + Default + 'static + PartialEq> Default for Register<T> {

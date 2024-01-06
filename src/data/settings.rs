@@ -1,7 +1,6 @@
 use std::io;
 use std::net::{IpAddr, Ipv6Addr};
 
-use crate::data::wiring::Orientation;
 use config::{Config, ConfigError, Environment, File};
 use google_sheets4::oauth2::{
     parse_service_account_key, read_service_account_key, ServiceAccountKey,
@@ -16,6 +15,8 @@ pub struct ServerSettings {
     port: Option<u16>,
     mgmt_port: Option<u16>,
     bind_address: Option<IpAddr>,
+    setup_file: Option<Box<str>>,
+    state_file: Option<Box<str>>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -54,6 +55,7 @@ pub struct GoogleSheet {
     button_templates: GoogleButtonTemplate,
     room_controllers: GoogleRoomController,
     motion_detectors: GoogleMotionDetectors,
+    relays: GoogleRelay,
 }
 #[derive(Deserialize, Debug)]
 pub struct GoogleButtonData {
@@ -122,6 +124,18 @@ pub struct GoogleMotionDetectors {
     id: Box<str>,
     idx: Box<str>,
 }
+#[derive(Deserialize, Debug)]
+pub struct GoogleRelay {
+    sheet: Box<str>,
+    range: Box<str>,
+    room_id: Box<str>,
+    id: Box<str>,
+    idx: Box<str>,
+    device_address: Box<str>,
+    device_channel: Box<str>,
+    temperature_sensor: Box<str>,
+    ring_button: Box<str>,
+}
 #[derive(Error, Debug)]
 pub enum GoogleError {
     #[error("IO Error {0}")]
@@ -174,6 +188,10 @@ impl GoogleSheet {
     }
     pub fn motion_detectors(&self) -> &GoogleMotionDetectors {
         &self.motion_detectors
+    }
+
+    pub fn relays(&self) -> &GoogleRelay {
+        &self.relays
     }
 }
 impl GoogleLightTemplateData {
@@ -339,6 +357,36 @@ impl GoogleMotionDetectors {
         &self.idx
     }
 }
+impl GoogleRelay {
+    pub fn sheet(&self) -> &str {
+        &self.sheet
+    }
+    pub fn range(&self) -> &str {
+        &self.range
+    }
+    pub fn room_id(&self) -> &str {
+        &self.room_id
+    }
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+    pub fn device_address(&self) -> &str {
+        &self.device_address
+    }
+    pub fn device_channel(&self) -> &str {
+        &self.device_channel
+    }
+    pub fn temperature_sensor(&self) -> &str {
+        &self.temperature_sensor
+    }
+    pub fn ring_button(&self) -> &str {
+        &self.ring_button
+    }
+
+    pub fn idx(&self) -> &str {
+        &self.idx
+    }
+}
 
 #[derive(Debug)]
 pub struct Settings {
@@ -357,6 +405,18 @@ impl ServerSettings {
     }
     pub fn bind_address(&self) -> &IpAddr {
         self.bind_address.as_ref().unwrap_or(&DEFAULT_IP_ADDRESS)
+    }
+    pub fn setup_file(&self) -> &str {
+        self.setup_file
+            .as_ref()
+            .map(Box::as_ref)
+            .unwrap_or("setup.yaml")
+    }
+    pub fn state_file(&self) -> &str {
+        self.state_file
+            .as_ref()
+            .map(Box::as_ref)
+            .unwrap_or("state.ron")
     }
 }
 fn create_settings() -> Result<Settings, ConfigError> {
