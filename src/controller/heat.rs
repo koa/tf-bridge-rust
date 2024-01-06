@@ -41,7 +41,7 @@ async fn heat_task(
     while let Some(event) = input.next().await {
         match event {
             HeatContollerMessage::UpdateTargetTemperature(target) => {
-                target_temperature = current_temperature;
+                target_temperature = target;
             }
             HeatContollerMessage::UpdateCurrentTemperature(current) => {
                 current_temperature = current;

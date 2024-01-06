@@ -1,23 +1,25 @@
-use chrono::format::Item;
-use futures::stream::SelectAll;
-use futures::{SinkExt, Stream};
+use futures::{stream::SelectAll, Stream};
 use log::error;
-use thiserror::Error;
-use tinkerforge_async::error::TinkerforgeError;
-use tinkerforge_async::industrial_quad_relay_bricklet::IndustrialQuadRelayBricklet;
-use tokio::sync::mpsc;
-use tokio::sync::mpsc::Sender;
-use tokio::task::JoinHandle;
-use tokio::time::sleep;
-use tokio_stream::wrappers::ReceiverStream;
-use tokio_stream::StreamExt;
+use tinkerforge_async::{
+    error::TinkerforgeError, industrial_quad_relay_v2_bricklet::IndustrialQuadRelayV2Bricklet,
+};
+use tokio::{
+    sync::mpsc::{self, Sender},
+    task::JoinHandle,
+    time::sleep,
+};
+use tokio_stream::{wrappers::ReceiverStream, StreamExt};
 
-use crate::data::registry::{EventRegistry, SwitchOutputKey};
-use crate::data::wiring::RelayChannelEntry;
-use crate::util::optional_stream;
+use crate::{
+    data::{
+        registry::{EventRegistry, SwitchOutputKey},
+        wiring::RelayChannelEntry,
+    },
+    util::optional_stream,
+};
 
 pub async fn handle_quad_relay(
-    bricklet: IndustrialQuadRelayBricklet,
+    bricklet: IndustrialQuadRelayV2Bricklet,
     event_registry: &EventRegistry,
     inputs: &[RelayChannelEntry],
 ) -> Sender<()> {
@@ -46,24 +48,19 @@ enum RelayMsg {
     Closed,
 }
 async fn quad_relay_task(
-    mut bricklet: IndustrialQuadRelayBricklet,
+    mut bricklet: IndustrialQuadRelayV2Bricklet,
     input_stream: impl Stream<Item = RelayMsg> + Unpin,
 ) -> Result<(), TinkerforgeError> {
     let (tx, rx) = mpsc::channel(2);
 
     let mut stream = input_stream.merge(ReceiverStream::new(rx));
-    let mut current_value = 0;
+    let mut current_value = [false; 4];
     let mut timer_handle = Some(start_send_timer(&tx));
-    bricklet.set_monoflop(0x0f, 0, 0).await?;
-
     while let Some(event) = stream.next().await {
         match event {
             RelayMsg::SetState(channel, state) => {
-                let new_value = if state {
-                    current_value | 1 << channel
-                } else {
-                    current_value & !1 << channel
-                };
+                let mut new_value = current_value.clone();
+                new_value[channel as usize] = state;
                 if new_value != current_value {
                     current_value = new_value;
                     if let Some(old_timer) = timer_handle.replace(start_send_timer(&tx)) {
@@ -73,7 +70,7 @@ async fn quad_relay_task(
             }
             RelayMsg::Closed => {}
             RelayMsg::UpdateState => {
-                bricklet.set_value(current_value).await?;
+                bricklet.set_value(&current_value).await?;
             }
         }
     }

@@ -1,43 +1,40 @@
-use std::borrow::Cow;
-use std::time::Duration;
 use std::{
+    borrow::Cow,
     collections::{HashMap, HashSet},
     fmt::{Debug, Display, Formatter, Write},
     io,
     str::FromStr,
+    time::Duration,
 };
 
-use futures::StreamExt;
-use google_sheets4::api::SpreadsheetMethods;
 use google_sheets4::{
-    api::{BatchUpdateValuesRequest, CellData, GridData, Spreadsheet, ValueRange},
+    api::{
+        BatchUpdateValuesRequest, CellData, GridData, Spreadsheet, SpreadsheetMethods, ValueRange,
+    },
     hyper::{client::HttpConnector, Client},
     hyper_rustls::{self, HttpsConnector},
     oauth2::{authenticator::Authenticator, ServiceAccountAuthenticator},
     Sheets,
 };
 use log::error;
-use serde::de::Visitor;
-use serde::{Deserialize, Deserializer};
+use serde::Deserialize;
 use serde_yaml::Value;
 use thiserror::Error;
 
-use crate::data::registry::{
-    BrightnessKey, ClockKey, DualButtonKey, LightColorKey, SingleButtonKey, SwitchOutputKey,
-    TemperatureKey,
-};
-use crate::data::settings::{GoogleButtonData, GoogleButtonTemplate, GoogleSheet};
-use crate::data::wiring::{
-    ButtonSetting, Controllers, DmxConfigEntry, DmxSettings, DualInputDimmer, DualInputSwitch,
-    HeatController, IoSettings, MotionDetector, MotionDetectorSettings, Orientation,
-    RelayChannelEntry, RelaySettings, RingController, ScreenSettings, TemperatureSettings,
-    TinkerforgeDevices, Wiring,
-};
-use crate::data::{DeviceInRoom, SubDeviceInRoom, Uid};
 use crate::{
     data::{
-        settings::{GoogleError, CONFIG},
-        Room,
+        registry::{
+            BrightnessKey, ClockKey, DualButtonKey, LightColorKey, SingleButtonKey,
+            SwitchOutputKey, TemperatureKey,
+        },
+        settings::{GoogleButtonData, GoogleButtonTemplate, GoogleError, GoogleSheet, CONFIG},
+        wiring::{
+            ButtonSetting, Controllers, DmxConfigEntry, DmxSettings, DualInputDimmer,
+            DualInputSwitch, HeatController, IoSettings, MotionDetector, MotionDetectorSettings,
+            Orientation, RelayChannelEntry, RelaySettings, RingController, ScreenSettings,
+            TemperatureSettings, TinkerforgeDevices, Wiring,
+        },
+        DeviceInRoom, Room, SubDeviceInRoom, Uid,
     },
     util::kelvin_2_mireds,
 };
@@ -1270,7 +1267,7 @@ fn get_cell_integer(row: &[CellData], idx: usize) -> Option<i64> {
 
 #[derive(Error, Debug)]
 #[error("Missing Headers: {0:?}")]
-struct HeaderError(Box<[Box<str>]>);
+pub struct HeaderError(Box<[Box<str>]>);
 fn parse_headers<const N: usize>(
     row: &[CellData],
     header_columns: [&str; N],

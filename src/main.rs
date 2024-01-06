@@ -5,14 +5,14 @@ use actix_web::{get, App, HttpServer};
 use actix_web_prometheus::PrometheusMetricsBuilder;
 use env_logger::{Env, TimestampPrecision};
 use futures::TryFutureExt;
-use log::{error, info};
+use log::{error, info, warn};
 use prometheus::{gather, Encoder, TextEncoder};
 use thiserror::Error;
+use tinkerforge_async::industrial_quad_relay_v2_bricklet::IndustrialQuadRelayV2Bricklet;
 use tinkerforge_async::{
     base58::Base58,
     dmx_bricklet::DmxBricklet,
     error::TinkerforgeError,
-    industrial_quad_relay_bricklet::IndustrialQuadRelayBricklet,
     io16_v2_bricklet::Io16V2Bricklet,
     ip_connection::{async_io::AsyncIpConnection, EnumerateResponse, EnumerationType},
     lcd_128x64_bricklet::Lcd128x64Bricklet,
@@ -86,11 +86,11 @@ async fn run_enumeration_listener<T: ToSocketAddrs>(
     addr: T,
     event_registry: EventRegistry,
     tinkerforge_devices: Arc<TinkerforgeDevices>,
+    registered_devices: &mut HashMap<Uid, mpsc::Sender<()>>,
 ) -> Result<(), TfBridgeError> {
     let ipcon = AsyncIpConnection::new(addr).await?;
     // Enumerate
     let stream = ipcon.clone().enumerate().await?;
-    let mut running_threads: HashMap<_, mpsc::Sender<()>> = HashMap::new();
     pin!(stream);
     while let Some(paket) = stream.next().await {
         //print_enumerate_response(&paket);
@@ -123,7 +123,7 @@ async fn run_enumeration_listener<T: ToSocketAddrs>(
                                 {
                                     info!("Found LCD Device: {}", paket.uid);
                                     register_handle(
-                                        &mut running_threads,
+                                        registered_devices,
                                         uid,
                                         start_screen_thread(
                                             Lcd128x64Bricklet::new(uid.into(), ipcon.clone()),
@@ -140,7 +140,7 @@ async fn run_enumeration_listener<T: ToSocketAddrs>(
                                 {
                                     info!("Found DMX Bricklet: {}", paket.uid);
                                     register_handle(
-                                        &mut running_threads,
+                                        registered_devices,
                                         uid,
                                         handle_dmx(
                                             DmxBricklet::new(uid.into(), ipcon.clone()),
@@ -156,7 +156,7 @@ async fn run_enumeration_listener<T: ToSocketAddrs>(
                                 if let Some(settings) = tinkerforge_devices.io_bricklets.get(&uid) {
                                     info!("Found IO 16 Bricklet: {}", paket.uid);
                                     register_handle(
-                                        &mut running_threads,
+                                        registered_devices,
                                         uid,
                                         handle_io16_v2(
                                             Io16V2Bricklet::new(uid.into(), ipcon.clone()),
@@ -174,7 +174,7 @@ async fn run_enumeration_listener<T: ToSocketAddrs>(
                                 {
                                     info!("Found Motion detector Bricklet: {}", paket.uid);
                                     register_handle(
-                                        &mut running_threads,
+                                        registered_devices,
                                         uid,
                                         handle_motion_detector(
                                             MotionDetectorV2Bricklet::new(
@@ -192,12 +192,9 @@ async fn run_enumeration_listener<T: ToSocketAddrs>(
                                 if let Some(settings) =
                                     tinkerforge_devices.temperature_sensors.get(&uid)
                                 {
-                                    info!(
-                                        "Found Temperature Bricklet: {}\n{:#?}",
-                                        paket.uid, settings
-                                    );
+                                    info!("Found Temperature Bricklet: {}", paket.uid);
                                     register_handle(
-                                        &mut running_threads,
+                                        registered_devices,
                                         uid,
                                         handle_temperature(
                                             TemperatureV2Bricklet::new(uid.into(), ipcon.clone()),
@@ -208,14 +205,14 @@ async fn run_enumeration_listener<T: ToSocketAddrs>(
                                     .await;
                                 }
                             }
-                            IndustrialQuadRelayBricklet::DEVICE_IDENTIFIER => {
+                            IndustrialQuadRelayV2Bricklet::DEVICE_IDENTIFIER => {
                                 if let Some(settings) = tinkerforge_devices.relays.get(&uid) {
-                                    info!("Found Relay Bricklet: {}\n{:#?}", paket.uid, settings);
+                                    info!("Found Relay Bricklet: {}", paket.uid);
                                     register_handle(
-                                        &mut running_threads,
+                                        registered_devices,
                                         uid,
                                         handle_quad_relay(
-                                            IndustrialQuadRelayBricklet::new(
+                                            IndustrialQuadRelayV2Bricklet::new(
                                                 uid.into(),
                                                 ipcon.clone(),
                                             ),
@@ -253,9 +250,8 @@ async fn register_handle(
     abort_handle: mpsc::Sender<()>,
 ) {
     if let Some(old_handle) = running_threads.insert(uid, abort_handle) {
-        //info!("Stop old thread");
         if let Err(error) = old_handle.send(()).await {
-            error!("Cannot stop thread: {error}")
+            warn!("Cannot terminate old thread: {error}")
         }
     }
 }
@@ -267,24 +263,26 @@ fn start_enumeration_listener<T: ToSocketAddrs + Clone + Debug + Send + Sync + '
 ) -> JoinHandle<()> {
     let connection = connection.clone();
     task::spawn(async move {
+        let mut running_threads: HashMap<Uid, mpsc::Sender<()>> = HashMap::new();
+
         let socket_str = format!("{connection:?}");
         loop {
             match run_enumeration_listener(
                 connection.clone(),
                 event_registry.clone(),
                 tinkerforge_devices.clone(),
+                &mut running_threads,
             )
             .await
             {
                 Ok(_) => {
                     info!("{socket_str}: Closed");
-                    break;
                 }
                 Err(e) => {
                     error!("{socket_str}: Error: {e}");
-                    sleep(Duration::from_secs(10)).await;
                 }
             };
+            sleep(Duration::from_secs(10)).await;
         }
     })
 }

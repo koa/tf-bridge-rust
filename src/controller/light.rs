@@ -1,7 +1,7 @@
 use std::{hash::Hash, num::Saturating, time::Duration};
 
 use futures::stream::SelectAll;
-use log::{error, info};
+use log::error;
 use tokio::{
     sync::mpsc::{self, error::SendError, Sender},
     task::{AbortHandle, JoinHandle},
