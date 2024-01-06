@@ -23,4 +23,7 @@ jobs:
       uses: docker/build-push-action@v5
       with:
         push: true
-        tags: ghcr.io/koa/tf-bridge-rust:latest,ghcr.io/koa/tf-bridge-rust:$(date +%s)
+        images: ghcr.io/koa/tf-bridge-rust
+        tags:  |
+          type=schedule
+          type=semver,pattern={{version}}
