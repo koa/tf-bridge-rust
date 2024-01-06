@@ -22,7 +22,12 @@ jobs:
           ghcr.io/koa/tf-bridge-rust
         tags: |
           type=schedule
+          type=ref,event=branch
+          type=ref,event=pr
           type=semver,pattern={{version}}
+          type=semver,pattern={{major}}.{{minor}}
+          type=semver,pattern={{major}}
+          type=sha
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v3
     - name: Login to GitHub Container Registry
