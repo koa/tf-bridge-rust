@@ -53,6 +53,7 @@ pub struct GoogleSheet {
     buttons: GoogleButtonData,
     button_templates: GoogleButtonTemplate,
     room_controllers: GoogleRoomController,
+    motion_detectors: GoogleMotionDetectors,
 }
 #[derive(Deserialize, Debug)]
 pub struct GoogleButtonData {
@@ -112,6 +113,15 @@ pub struct GoogleRoomController {
     enable_whitebalance_control: Box<str>,
     enable_brightness_control: Box<str>,
 }
+#[derive(Deserialize, Debug)]
+pub struct GoogleMotionDetectors {
+    sheet: Box<str>,
+    range: Box<str>,
+    room_id: Box<str>,
+    device_address: Box<str>,
+    id: Box<str>,
+    idx: Box<str>,
+}
 #[derive(Error, Debug)]
 pub enum GoogleError {
     #[error("IO Error {0}")]
@@ -161,6 +171,9 @@ impl GoogleSheet {
 
     pub fn room_controllers(&self) -> &GoogleRoomController {
         &self.room_controllers
+    }
+    pub fn motion_detectors(&self) -> &GoogleMotionDetectors {
+        &self.motion_detectors
     }
 }
 impl GoogleLightTemplateData {
@@ -296,14 +309,34 @@ impl GoogleRoomController {
         &self.orientation
     }
 
-    pub fn enable_heat_control(&self) -> &Box<str> {
+    pub fn enable_heat_control(&self) -> &str {
         &self.enable_heat_control
     }
-    pub fn enable_whitebalance_control(&self) -> &Box<str> {
+    pub fn enable_whitebalance_control(&self) -> &str {
         &self.enable_whitebalance_control
     }
-    pub fn enable_brightness_control(&self) -> &Box<str> {
+    pub fn enable_brightness_control(&self) -> &str {
         &self.enable_brightness_control
+    }
+}
+impl GoogleMotionDetectors {
+    pub fn sheet(&self) -> &str {
+        &self.sheet
+    }
+    pub fn range(&self) -> &str {
+        &self.range
+    }
+    pub fn room_id(&self) -> &str {
+        &self.room_id
+    }
+    pub fn device_address(&self) -> &str {
+        &self.device_address
+    }
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+    pub fn idx(&self) -> &str {
+        &self.idx
     }
 }
 

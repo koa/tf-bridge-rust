@@ -31,8 +31,8 @@ use crate::data::settings::{
 };
 use crate::data::wiring::{
     ButtonSetting, Controllers, DmxConfigEntry, DmxSettings, DualInputDimmer, DualInputSwitch,
-    HeatController, IoSettings, MotionDetector, Orientation, ScreenSettings, TemperatureSettings,
-    TinkerforgeDevices, Wiring,
+    HeatController, IoSettings, MotionDetector, MotionDetectorSettings, Orientation,
+    ScreenSettings, TemperatureSettings, TinkerforgeDevices, Wiring,
 };
 use crate::data::{DeviceInRoom, SubDeviceInRoom, Uid};
 use crate::{
@@ -61,6 +61,8 @@ pub enum GoogleDataError {
     ButtonHeader(HeaderError),
     #[error("Error parsing controller header: {0}")]
     ControllerHeader(HeaderError),
+    #[error("Error parsing motion detector header: {0}")]
+    MotionDetectorHeader(HeaderError),
 }
 
 enum LightTemplateTypes {
@@ -103,6 +105,7 @@ pub async fn read_sheet_data() -> Result<Option<Wiring>, GoogleDataError> {
         let button_templates = config.button_templates();
         let button_config = config.buttons();
         let room_controllers = config.room_controllers();
+        let motion_detectors = config.motion_detectors();
 
         let spreadsheet_methods = hub.spreadsheets();
         let (_, sheet) = spreadsheet_methods
@@ -113,6 +116,11 @@ pub async fn read_sheet_data() -> Result<Option<Wiring>, GoogleDataError> {
                 "{}!{}",
                 room_controllers.sheet(),
                 room_controllers.range()
+            ))
+            .add_ranges(&format!(
+                "{}!{}",
+                motion_detectors.sheet(),
+                motion_detectors.range()
             ))
             .add_ranges(&format!(
                 "{}!{}",
@@ -140,6 +148,7 @@ pub async fn read_sheet_data() -> Result<Option<Wiring>, GoogleDataError> {
         let mut dmx_bricklets = HashMap::<_, Vec<_>>::new();
         let mut lcd_screens = HashMap::new();
         let mut temperature_sensors = HashMap::new();
+        let mut motion_detector_sensors = HashMap::new();
 
         let mut dual_input_dimmers = Vec::new();
         let mut dual_input_switches = Vec::new();
@@ -151,6 +160,7 @@ pub async fn read_sheet_data() -> Result<Option<Wiring>, GoogleDataError> {
         let mut heat_outputs = HashMap::new();
         let mut touchscreen_whitebalances = HashMap::new();
         let mut touchscreen_brightness = HashMap::new();
+        let mut motion_detector_adresses = HashMap::new();
         parse_buttons(
             config,
             button_templates,
@@ -160,6 +170,14 @@ pub async fn read_sheet_data() -> Result<Option<Wiring>, GoogleDataError> {
             &mut io_bricklets,
             &mut single_button_adresses,
             &mut dual_button_adresses,
+        )
+        .await?;
+        parse_motion_detectors(
+            config,
+            &spreadsheet_methods,
+            &sheet,
+            &mut motion_detector_sensors,
+            &mut motion_detector_adresses,
         )
         .await?;
         parse_controllers(
@@ -188,6 +206,7 @@ pub async fn read_sheet_data() -> Result<Option<Wiring>, GoogleDataError> {
             &mut dual_button_adresses,
             &mut touchscreen_whitebalances,
             &mut touchscreen_brightness,
+            &mut motion_detector_adresses,
         )
         .await?;
         Some(Wiring {
@@ -221,7 +240,7 @@ pub async fn read_sheet_data() -> Result<Option<Wiring>, GoogleDataError> {
                         )
                     })
                     .collect(),
-                motion_detectors: Default::default(),
+                motion_detectors: motion_detector_sensors,
                 relays: Default::default(),
                 temperature_sensors,
             },
@@ -408,6 +427,86 @@ async fn parse_controllers<'a>(
     }
     Ok(())
 }
+async fn parse_motion_detectors<'a>(
+    config: &GoogleSheet,
+    spreadsheet_methods: &SpreadsheetMethods<'_, HttpsConnector<HttpConnector>>,
+    sheet: &'a Spreadsheet,
+    motion_detectors: &mut HashMap<Uid, MotionDetectorSettings>,
+    single_button_adresses: &mut HashMap<&'a str, SingleButtonKey>,
+) -> Result<(), GoogleDataError> {
+    struct MotionDetectorRow<'a> {
+        id: &'a str,
+        room: Room,
+        device_address: Uid,
+        idx: Option<u16>,
+    }
+    impl<'a> DeviceIdxAccess for MotionDetectorRow<'a> {
+        fn existing_id(&self) -> Option<u16> {
+            self.idx
+        }
+
+        fn update_id(&mut self, id: u16) {
+            self.idx = Some(id);
+        }
+    }
+    let md_config = config.motion_detectors();
+    if let Some(motion_detector_grid) = find_sheet_by_name(&sheet, md_config.sheet()) {
+        let (start_row, start_column, mut rows) = get_grid_and_coordinates(motion_detector_grid);
+        if let Some((_, header)) = rows.next() {
+            let [room_column, address_column, id_column, idx_column] = parse_headers(
+                header,
+                [
+                    md_config.room_id(),
+                    md_config.device_address(),
+                    md_config.id(),
+                    md_config.idx(),
+                ],
+            )
+            .map_err(GoogleDataError::MotionDetectorHeader)?;
+            let mut device_ids_of_rooms = HashMap::<_, Vec<_>>::new();
+            for (row_idx, row) in rows {
+                if let (Some(room), Some(device_address), Some(id), idx) = (
+                    get_cell_content(row, room_column)
+                        .map(Room::from_str)
+                        .and_then(Result::ok),
+                    get_cell_content(row, address_column)
+                        .map(Uid::from_str)
+                        .and_then(Result::ok),
+                    get_cell_content(row, id_column),
+                    get_cell_integer(row, idx_column).map(|v| v as u16),
+                ) {
+                    let row = row_idx + start_row;
+                    let col = idx_column + start_column;
+                    device_ids_of_rooms.entry(room).or_default().push((
+                        CellCoordinates { row, col },
+                        MotionDetectorRow {
+                            id,
+                            room,
+                            device_address,
+                            idx,
+                        },
+                    ));
+                }
+            }
+            let motion_detector_rows = adjust_device_idx(
+                config,
+                spreadsheet_methods,
+                device_ids_of_rooms,
+                md_config.sheet(),
+            )
+            .await?;
+            for row in motion_detector_rows {
+                let key = SingleButtonKey::MotionDetector(DeviceInRoom {
+                    room: row.room,
+                    idx: row.idx.unwrap(),
+                });
+                motion_detectors.insert(row.device_address, MotionDetectorSettings { output: key });
+                single_button_adresses.insert(row.id, key);
+            }
+        }
+    }
+    Ok(())
+}
 async fn parse_lights<'a>(
     config: &GoogleSheet,
     light_templates: &GoogleLightTemplateData,
@@ -417,11 +516,12 @@ async fn parse_lights<'a>(
     dmx_bricklets: &mut HashMap<Uid, Vec<DmxConfigEntry>>,
     dual_input_dimmers: &mut Vec<DualInputDimmer>,
     dual_input_switches: &mut Vec<DualInputSwitch>,
-    motion_detectors: &mut Vec<MotionDetector>,
+    motion_detector_controllers: &mut Vec<MotionDetector>,
     single_button_adresses: &mut HashMap<Cow<'a, str>, SingleButtonKey>,
     dual_button_adresses: &mut HashMap<Cow<'a, str>, DualButtonKey>,
     touchscreen_whitebalances: &mut HashMap<&'a str, LightColorKey>,
     touchscreen_brightness: &mut HashMap<&'a str, BrightnessKey>,
+    motion_detector_adresses: &mut HashMap<&'a str, SingleButtonKey>,
 ) -> Result<(), GoogleDataError> {
     let mut light_template_map = HashMap::new();
     if let Some(light_templates_grid) = find_sheet_by_name(sheet, light_templates.sheet()) {
@@ -604,7 +704,7 @@ async fn parse_lights<'a>(
                 let presence_detectors = light_row
                     .presence_detectors
                     .iter()
-                    .flat_map(|name| single_button_adresses.get(*name))
+                    .flat_map(|name| motion_detector_adresses.get(*name))
                     .copied()
                     .collect::<Vec<_>>()
                     .into_boxed_slice();
@@ -627,7 +727,7 @@ async fn parse_lights<'a>(
                         });
                         if manual_buttons.is_empty() {
                             if !presence_detectors.is_empty() {
-                                motion_detectors.push(MotionDetector::Switch {
+                                motion_detector_controllers.push(MotionDetector::Switch {
                                     input: presence_detectors,
                                     output: register,
                                     switch_off_time: auto_switch_off_time,
@@ -653,7 +753,7 @@ async fn parse_lights<'a>(
                         });
                         if manual_buttons.is_empty() {
                             if !presence_detectors.is_empty() {
-                                motion_detectors.push(MotionDetector::Dimmer {
+                                motion_detector_controllers.push(MotionDetector::Dimmer {
                                     input: presence_detectors,
                                     output: register,
                                     brightness: light_row
@@ -676,31 +776,22 @@ async fn parse_lights<'a>(
                         warm_temperature,
                         cold_temperature,
                     } => {
-                        let brightness_register = if manual_buttons.is_empty() {
-                            light_row
-                                .touchscreen_brightness
-                                .and_then(|k| touchscreen_brightness.get(k))
-                                .copied()
-                        } else {
-                            None
-                        }
-                        .unwrap_or(BrightnessKey::Light(DeviceInRoom {
+                        let device_in_room = DeviceInRoom {
                             room: light_row.room,
                             idx: light_row.device_id_in_room.unwrap(),
-                        }));
+                        };
+
+                        let output_brightness_register = BrightnessKey::Light(device_in_room);
                         let whitebalance_register = if let Some(wb) = light_row
                             .touchscreen_whitebalance
                             .and_then(|k| touchscreen_whitebalances.get(k))
                         {
                             *wb
                         } else {
-                            LightColorKey::Light(DeviceInRoom {
-                                room: light_row.room,
-                                idx: light_row.device_id_in_room.unwrap(),
-                            })
+                            LightColorKey::Light(device_in_room)
                         };
                         dmx_bricklet_settings.push(DmxConfigEntry::DimmWhitebalance {
-                            brightness_register,
+                            brightness_register: output_brightness_register,
                             whitebalance_register,
                             warm_channel: light_row.bus_start_address,
                             cold_channel: light_row.bus_start_address + 1,
@@ -709,9 +800,9 @@ async fn parse_lights<'a>(
                         });
                         if manual_buttons.is_empty() {
                             if !presence_detectors.is_empty() {
-                                motion_detectors.push(MotionDetector::Dimmer {
+                                motion_detector_controllers.push(MotionDetector::Dimmer {
                                     input: presence_detectors,
-                                    output: brightness_register,
+                                    output: output_brightness_register,
                                     brightness: light_row
                                         .touchscreen_brightness
                                         .and_then(|k| touchscreen_brightness.get(k))
@@ -722,7 +813,7 @@ async fn parse_lights<'a>(
                         } else {
                             dual_input_dimmers.push(DualInputDimmer {
                                 input: manual_buttons,
-                                output: brightness_register,
+                                output: output_brightness_register,
                                 auto_switch_off_time,
                                 presence: presence_detectors,
                             });
@@ -971,7 +1062,7 @@ async fn parse_buttons<'a>(
                     };
                     match button_row.button_template.style {
                         ButtonStyle::Single => {
-                            let output = SingleButtonKey(sub_device_in_room);
+                            let output = SingleButtonKey::Button(sub_device_in_room);
                             io_bricklet_settings.push(ButtonSetting::Single {
                                 button: current_input_idx,
                                 output,

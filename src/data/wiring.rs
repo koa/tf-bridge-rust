@@ -127,11 +127,11 @@ pub enum ButtonSetting {
 }
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub struct MotionDetectorSettings {
-    output: SingleButtonKey,
+    pub output: SingleButtonKey,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct RelaySettings {
-    entries: Box<[RelayChannelEntry]>,
+    pub entries: Box<[RelayChannelEntry]>,
 }
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 pub struct RelayChannelEntry {

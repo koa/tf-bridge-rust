@@ -204,7 +204,7 @@ async fn run_enumeration_listener<T: ToSocketAddrs>(
                                     handle_motion_detector(
                                         MotionDetectorV2Bricklet::new(uid, ipcon.clone()),
                                         event_registry.clone(),
-                                        SingleButtonKey(Default::default()),
+                                        SingleButtonKey::MotionDetector(Default::default()),
                                     ),
                                 )
                                 .await;
