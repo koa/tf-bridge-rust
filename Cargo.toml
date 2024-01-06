@@ -7,7 +7,7 @@ edition = "2021"
 
 [dependencies]
 chrono = "0.4.31"
-tinkerforge-async = { version = "0.0.1", features = ["prometheus"], path = "../generators/rust/zip" }
+tinkerforge-async = { version = "0.0.2", features = ["prometheus"] }
 tokio = { version = "1.33.0", features = ["fs"] }
 tokio-stream = { version = "0.1.14", features = ["time", "sync"] }
 sub-array = "0.1.1"
