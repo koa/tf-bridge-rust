@@ -1,8 +1,10 @@
+use std::fs::File;
 use std::{collections::HashMap, error::Error, fmt::Debug, sync::Arc, time::Duration};
 
 use actix_web::{get, App, HttpServer};
 use actix_web_prometheus::PrometheusMetricsBuilder;
 use env_logger::{Env, TimestampPrecision};
+use futures::TryFutureExt;
 use log::{error, info};
 use prometheus::{gather, Encoder, TextEncoder};
 use thiserror::Error;
@@ -20,19 +22,18 @@ use tinkerforge_async::{
 use tokio::{join, net::ToSocketAddrs, pin, sync::mpsc, task, task::JoinHandle, time::sleep};
 use tokio_stream::StreamExt;
 
+use crate::controller::action::ring_controller;
+use crate::controller::heat::heat_controller;
 use crate::{
     controller::light::{
         dual_input_dimmer, dual_input_switch, motion_detector, motion_detector_dimmer,
     },
     data::{
         google_data::read_sheet_data,
-        registry::{BrightnessKey, DualButtonKey, EventRegistry, LightColorKey},
+        registry::EventRegistry,
         settings::CONFIG,
-        wiring::DmxConfigEntry,
-        wiring::{
-            Controllers, DmxSettings, DualInputDimmer, MotionDetector, TinkerforgeDevices, Wiring,
-        },
-        DeviceInRoom, Uid,
+        wiring::{Controllers, MotionDetector, TinkerforgeDevices, Wiring},
+        Uid,
     },
     devices::{
         dmx_handler::handle_dmx, io_handler::handle_io16_v2,
@@ -40,7 +41,6 @@ use crate::{
         screen_data_renderer::start_screen_thread, temperature::handle_temperature,
     },
     snapshot::{read_snapshot, write_snapshot},
-    util::kelvin_2_mireds,
 };
 
 mod controller;
@@ -301,6 +301,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let mgmt_port = CONFIG.server.mgmt_port();
     let tinkerforge = &CONFIG.tinkerforge;
     let state_file = CONFIG.server.state_file();
+    let setup_file = CONFIG.server.setup_file();
 
     let prometheus = PrometheusMetricsBuilder::new("")
         .endpoint("/metrics")
@@ -320,67 +321,21 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     start_snapshot_thread(&event_registry, state_file);
 
-    let wiring = Wiring {
-        controllers: Controllers {
-            dual_input_dimmers: Box::new([DualInputDimmer {
-                input: Box::new([DualButtonKey(Default::default())]),
-                output: BrightnessKey::Light(Default::default()),
-                auto_switch_off_time: Duration::from_secs(2 * 3600),
-                presence: Box::new([]),
-            }]),
-            dual_input_switches: Box::new([]),
-            motion_detectors: Box::new([]),
-            heat_controllers: Box::new([]),
-            ring_controllers: Box::new([]),
-        },
-        tinkerforge_devices: TinkerforgeDevices {
-            lcd_screens: Default::default(),
-            dmx_bricklets: HashMap::from([(
-                "EHc".parse().unwrap(),
-                DmxSettings {
-                    entries: Box::new([
-                        DmxConfigEntry::Dimm {
-                            register: BrightnessKey::Light(DeviceInRoom {
-                                room: "1.4".parse().unwrap(),
-                                idx: 0,
-                            }),
-                            channel: 3,
-                        },
-                        DmxConfigEntry::DimmWhitebalance {
-                            brightness_register: BrightnessKey::Light(DeviceInRoom {
-                                room: "1.4".parse().unwrap(),
-                                idx: 0,
-                            }),
-                            whitebalance_register: LightColorKey::Light(DeviceInRoom {
-                                room: "1.4".parse().unwrap(),
-                                idx: 0,
-                            }),
-                            warm_channel: 2,
-                            cold_channel: 3,
-                            warm_mireds: kelvin_2_mireds(2700),
-                            cold_mireds: kelvin_2_mireds(7500),
-                        },
-                    ]),
-                },
-            )]),
-            io_bricklets: Default::default(),
-            motion_detectors: Default::default(),
-            relays: Default::default(),
-            temperature_sensors: Default::default(),
-        },
+    let wiring = if let Some(google_data) = match read_sheet_data().await {
+        Ok(data) => {
+            serde_yaml::to_writer(File::create(setup_file)?, &data)?;
+            data
+        }
+        Err(error) => {
+            error!("Cannot read config from google: {error}");
+            None
+        }
+    } {
+        google_data
+    } else {
+        serde_yaml::from_reader(File::open(setup_file)?)?
     };
 
-    let wiring = read_sheet_data().await.unwrap().unwrap();
-    //info!("Config: \n{}", serde_yaml::to_string(&wiring).unwrap());
-
-    let mut debug_stream = event_registry
-        .dual_button_stream(DualButtonKey(Default::default()))
-        .await;
-    tokio::spawn(async move {
-        while let Some(event) = debug_stream.next().await {
-            info!("Event: {event:?}")
-        }
-    });
     let Wiring {
         controllers:
             Controllers {
@@ -436,6 +391,18 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 .await
             }
         };
+    }
+    for cfg in heat_controllers.iter() {
+        heat_controller(
+            &event_registry,
+            cfg.current_value_input,
+            cfg.target_value_input,
+            cfg.output,
+        )
+        .await;
+    }
+    for cfg in ring_controllers.iter() {
+        ring_controller(&event_registry, cfg.input, cfg.output).await;
     }
     let tinkerforge_devices = Arc::new(tinkerforge_devices);
 

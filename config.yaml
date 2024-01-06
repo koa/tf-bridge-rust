@@ -1,0 +1,78 @@
+server: {}
+tinkerforge:
+  endpoints:
+    - address: 10.192.64.23
+    - address: 10.192.64.21
+google-sheet:
+  key_file: sa-development.json
+  spreadsheet_id: 1a2OKCYMOUxE7PfjLjPgvIAf7WY9Y6uTMiXkEKHLlDoo
+  light_templates:
+    sheet: Templates
+    range: A:D
+    name_column: Name
+    discriminator_column: Typ
+    temperature_warm_column: Lichttemperatur Warm
+    temperature_cold_column: Lichttemperatur Kalt
+  light:
+    sheet: Lichter
+    range: A:S
+    room_id: Raum Nummer
+    light_id: Id
+    light_idx: Idx
+    template: Typ
+    device_address: DMX
+    bus_start_address: Startadresse
+    manual_buttons:
+      - Taster 1
+      - Taster 2
+      - Taster 3
+    presence_detectors:
+      - Bewegungsmelder 1
+      - Bewegungsmelder 2
+      - Bewegungsmelder 3
+    touchscreen_whitebalance: Touchscreen Farbe
+    touchscreen_brightness: Touchscreen Helligkeit
+  button_templates:
+    sheet: Taster Modelle
+    range: A:G
+    name: Name
+    discriminator: Typ
+    sub_devices: variants
+  buttons:
+    sheet: Taster
+    range: A:I
+    room_id: Raum Nummer
+    button_id: id
+    button_idx: Idx
+    button_type: Typ
+    device_address: IO-16 Bricklet
+    first_input_idx: Start-Position
+  room_controllers:
+    sheet: Touchscreen / Temperaturfühler
+    range: A:L
+    room_id: Raum Nummer
+    controller_id: id
+    controller_idx: Idx
+    orientation: Orientation
+    touchscreen_device_address: Adresse Touchscreen
+    temperature_device_address: Adresse Temperaturfühler
+    enable_heat_control: Heizkreise
+    enable_whitebalance_control: Farbe
+    enable_brightness_control: Helligkeit
+  motion_detectors:
+    sheet: Bewegungsmelder
+    range: A:H
+    room_id: Raum Nummer
+    device_address: Adresse
+    id: id
+    idx: Idx
+  relays:
+    sheet: Relay
+    range: A:K
+    room_id: Raum Nummer
+    id: id
+    idx: Idx
+    device_address: Relay Bricklet
+    device_channel: Position
+    temperature_sensor: Fühler
+    ring_button: Taster

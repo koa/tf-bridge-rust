@@ -1,3 +1,3 @@
-mod action;
+pub mod action;
 pub mod heat;
 pub mod light;
