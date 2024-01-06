@@ -91,7 +91,7 @@ pub struct GoogleLightData {
     sheet: Box<str>,
     range: Box<str>,
     room_id: Box<str>,
-    light_id: Box<str>,
+    //light_id: Box<str>,
     light_idx: Box<str>,
     template: Box<str>,
     device_address: Box<str>,
@@ -129,7 +129,7 @@ pub struct GoogleRelay {
     sheet: Box<str>,
     range: Box<str>,
     room_id: Box<str>,
-    id: Box<str>,
+    //id: Box<str>,
     idx: Box<str>,
     device_address: Box<str>,
     device_channel: Box<str>,
@@ -222,9 +222,9 @@ impl GoogleLightData {
     pub fn room_id(&self) -> &str {
         &self.room_id
     }
-    pub fn light_id(&self) -> &str {
+    /*pub fn light_id(&self) -> &str {
         &self.light_id
-    }
+    }*/
     pub fn light_idx(&self) -> &str {
         &self.light_idx
     }
@@ -367,9 +367,9 @@ impl GoogleRelay {
     pub fn room_id(&self) -> &str {
         &self.room_id
     }
-    pub fn id(&self) -> &str {
+    /*pub fn id(&self) -> &str {
         &self.id
-    }
+    }*/
     pub fn device_address(&self) -> &str {
         &self.device_address
     }

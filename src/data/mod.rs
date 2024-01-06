@@ -1,10 +1,13 @@
-use log::info;
-use std::fmt::{Display, Formatter};
-use std::num::ParseIntError;
-use std::str::FromStr;
+use std::{
+    fmt::{Display, Formatter},
+    num::ParseIntError,
+    str::FromStr,
+};
 
-use serde::de::{Error, Visitor};
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde::{
+    de::{Error, Visitor},
+    Deserialize, Deserializer, Serialize, Serializer,
+};
 use thiserror::Error;
 use tinkerforge_async::base58::{u32_to_base58, Base58, Base58Error};
 

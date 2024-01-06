@@ -80,7 +80,7 @@ async fn create_presences_stream<L: Copy + Eq + Hash>(
     }
     presence_streams
 }
-
+/*
 async fn create_presence_stream<L: Copy + Eq + Hash>(
     event_registry: &EventRegistry,
     presence_key: Option<SingleButtonKey>,
@@ -91,7 +91,7 @@ async fn create_presence_stream<L: Copy + Eq + Hash>(
             ButtonState::ShortPressStart(_) => Some(DimmerEvent::<L>::PresenceDetected),
             _ => None,
         })
-}
+}*/
 
 pub async fn dual_input_switch(
     event_registry: &EventRegistry,

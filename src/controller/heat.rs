@@ -1,4 +1,4 @@
-use futures::{SinkExt, Stream};
+use futures::Stream;
 use log::error;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::SendError;

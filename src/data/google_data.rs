@@ -206,7 +206,6 @@ pub async fn read_sheet_data() -> Result<Option<Wiring>, GoogleDataError> {
             &mut dual_input_dimmers,
             &mut dual_input_switches,
             &mut motion_detectors,
-            &mut single_button_adresses,
             &mut dual_button_adresses,
             &mut touchscreen_whitebalance_addresses,
             &mut touchscreen_brightness_addresses,
@@ -296,12 +295,12 @@ async fn parse_relays<'a>(
     if let Some(relay_grid) = find_sheet_by_name(sheet, relay_configs.sheet()) {
         let (start_row, start_column, mut rows) = get_grid_and_coordinates(relay_grid);
         if let Some((_, header)) = rows.next() {
-            let [room_id_column, id_column, idx_column, device_address_column, device_channel_column, temperature_column, ring_button_column] =
+            let [room_id_column, /*id_column,*/ idx_column, device_address_column, device_channel_column, temperature_column, ring_button_column] =
                 parse_headers(
                     header,
                     [
                         relay_configs.room_id(),
-                        relay_configs.id(),
+                        //relay_configs.id(),
                         relay_configs.idx(),
                         relay_configs.device_address(),
                         relay_configs.device_channel(),
@@ -314,7 +313,7 @@ async fn parse_relays<'a>(
             for (row_idx, row) in rows {
                 if let (
                     Some(room),
-                    Some(id),
+                    //Some(id),
                     idx,
                     Some(uid),
                     Some(channel),
@@ -324,7 +323,7 @@ async fn parse_relays<'a>(
                     get_cell_content(row, room_id_column)
                         .map(Room::from_str)
                         .and_then(Result::ok),
-                    get_cell_content(row, id_column),
+                    //get_cell_content(row, id_column),
                     get_cell_integer(row, idx_column).map(|v| v as u16),
                     get_cell_content(row, device_address_column)
                         .map(Uid::from_str)
@@ -663,7 +662,6 @@ async fn parse_lights<'a>(
     dual_input_dimmers: &mut Vec<DualInputDimmer>,
     dual_input_switches: &mut Vec<DualInputSwitch>,
     motion_detector_controllers: &mut Vec<MotionDetector>,
-    single_button_adresses: &mut HashMap<Cow<'a, str>, SingleButtonKey>,
     dual_button_adresses: &mut HashMap<Cow<'a, str>, DualButtonKey>,
     touchscreen_whitebalances: &mut HashMap<&'a str, LightColorKey>,
     touchscreen_brightness: &mut HashMap<&'a str, BrightnessKey>,
@@ -718,7 +716,7 @@ async fn parse_lights<'a>(
         struct LightRowContent<'a> {
             room: Room,
             light_template: &'a LightTemplateTypes,
-            device_id: &'a str,
+            //device_id: &'a str,
             device_id_in_room: Option<u16>,
             device_address: Uid,
             bus_start_address: u16,
@@ -739,12 +737,12 @@ async fn parse_lights<'a>(
 
         let (start_row, start_column, mut rows) = get_grid_and_coordinates(light_grid);
         if let Some((_, header)) = rows.next() {
-            let [room_column, light_id_column, light_idx_column, template_column, device_address_column, bus_start_address_column, touchscreen_whitebalance_column, touchscreen_brightness_column] =
+            let [room_column, /*light_id_column,*/ light_idx_column, template_column, device_address_column, bus_start_address_column, touchscreen_whitebalance_column, touchscreen_brightness_column] =
                 parse_headers(
                     header,
                     [
                         light_config.room_id(),
-                        light_config.light_id(),
+                        //light_config.light_id(),
                         light_config.light_idx(),
                         light_config.template(),
                         light_config.device_address(),
@@ -777,7 +775,7 @@ async fn parse_lights<'a>(
                 if let (
                     Some(room),
                     device_id_in_room,
-                    Some(device_id),
+                    //Some(device_id),
                     Some(light_template),
                     Some(device_address),
                     Some(bus_start_address),
@@ -790,7 +788,7 @@ async fn parse_lights<'a>(
                         .map(Room::from_str)
                         .and_then(Result::ok),
                     get_cell_integer(row, light_idx_column).map(|id| id as u16),
-                    get_cell_content(row, light_id_column),
+                    //get_cell_content(row, light_id_column),
                     get_cell_content(row, template_column).and_then(|t| light_template_map.get(t)),
                     get_cell_content(row, device_address_column)
                         .map(Uid::from_str)
@@ -819,7 +817,7 @@ async fn parse_lights<'a>(
                         LightRowContent {
                             room,
                             light_template,
-                            device_id,
+                            //device_id,
                             device_id_in_room,
                             device_address,
                             bus_start_address: bus_start_address as u16,
@@ -985,7 +983,7 @@ async fn adjust_device_idx<R: DeviceIdxAccess>(
 ) -> Result<Vec<R>, GoogleDataError> {
     let mut updates = Vec::new();
     let mut device_rows = Vec::new();
-    for (devices) in device_ids_of_rooms.into_values() {
+    for devices in device_ids_of_rooms.into_values() {
         let mut occupied_ids = HashSet::new();
         let mut remaining_devices = Vec::with_capacity(devices.len());
         for (coordinates, row) in devices {
@@ -1146,7 +1144,7 @@ async fn parse_buttons<'a>(
             }
             let mut updates = Vec::new();
             let mut button_device_rows = Vec::new();
-            for (devices) in button_ids_of_rooms.into_values() {
+            for devices in button_ids_of_rooms.into_values() {
                 let mut occupied_ids = HashSet::new();
                 let mut remaining_devices = Vec::with_capacity(devices.len());
                 for (coordinates, button_row) in devices {

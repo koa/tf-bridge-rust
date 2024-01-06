@@ -196,7 +196,7 @@ impl<const W: usize, const L: usize> Default for BooleanImage<W, L> {
         Self { data: [false; L] }
     }
 }
-
+/*
 impl<const W: usize, const L: usize> BooleanImage<W, L> {
     pub fn new() -> Self {
         Self { data: [false; L] }
@@ -205,7 +205,7 @@ impl<const W: usize, const L: usize> BooleanImage<W, L> {
     pub fn data(&self) -> [bool; L] {
         self.data
     }
-}
+}*/
 
 impl<const W: usize, const L: usize> Dimensions for BooleanImage<W, L> {
     fn bounding_box(&self) -> Rectangle {

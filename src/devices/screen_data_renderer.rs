@@ -8,7 +8,7 @@ use chrono::{DateTime, Local, Timelike};
 use embedded_graphics::{
     draw_target::DrawTarget,
     geometry::Point,
-    image::{Image, ImageRaw},
+    image::Image,
     mono_font::{iso_8859_1::FONT_6X12, MonoTextStyle},
     pixelcolor::BinaryColor,
     prelude::PixelColor,
@@ -211,11 +211,13 @@ where
 }
 #[derive(Debug, Clone, Copy)]
 pub struct Adjustment<V> {
+    #[allow(unused)]
     old_value: V,
     new_value: V,
 }
 
 impl<V> Adjustment<V> {
+    #[allow(unused)]
     pub fn old_value(&self) -> &V {
         &self.old_value
     }
@@ -304,7 +306,7 @@ pub fn screen_data(
     }
 }
 
-fn show_icon_scale<'a>(
+/*fn show_icon_scale<'a>(
     value: f32,
     minus_button: &'a mut Option<Rectangle>,
     plus_button: &'a mut Option<Rectangle>,
@@ -319,7 +321,7 @@ fn show_icon_scale<'a>(
         )
         .append(scale(value, BinaryColor::On), 0),
     )
-}
+}*/
 
 fn show_adjustable_value<'a, L: Layoutable<BinaryColor> + 'a>(
     minus_button: &'a mut Option<Rectangle>,

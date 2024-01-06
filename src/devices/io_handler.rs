@@ -68,7 +68,6 @@ enum IoMessage {
     Press(u8),
     LongPress(u8),
     Release(u8),
-    Noop,
 }
 #[derive(Clone, Default)]
 enum ChannelSetting {
@@ -194,7 +193,6 @@ async fn io_16_v2_loop(
                     timer.abort();
                 }
             }
-            IoMessage::Noop => {}
         };
     }
     Ok(())

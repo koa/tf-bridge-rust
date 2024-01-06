@@ -10,13 +10,7 @@ use tokio::{
 };
 use tokio_stream::{wrappers::ReceiverStream, StreamExt};
 
-use crate::{
-    data::{
-        registry::{EventRegistry, SwitchOutputKey},
-        wiring::RelayChannelEntry,
-    },
-    util::optional_stream,
-};
+use crate::data::{registry::EventRegistry, wiring::RelayChannelEntry};
 
 pub async fn handle_quad_relay(
     bricklet: IndustrialQuadRelayV2Bricklet,
@@ -85,14 +79,4 @@ fn start_send_timer(tx: &Sender<RelayMsg>) -> JoinHandle<()> {
             .await
             .expect("Cannot enqueue update message");
     })
-}
-
-async fn relay_stream(
-    event_registry: &EventRegistry,
-    inputs: [Option<SwitchOutputKey>; 4],
-    idx: u8,
-) -> impl Stream<Item = RelayMsg> + Sized {
-    optional_stream(inputs[idx as usize].map(|key| event_registry.switch_stream(key)))
-        .await
-        .map(move |state| RelayMsg::SetState(idx, state))
 }
