@@ -14,13 +14,8 @@ impl Drop for DeviceThreadTerminator {
     fn drop(&mut self) {
         if let Some(sender) = self.0.take() {
             tokio::spawn(async move {
-                match sender.send(()).await {
-                    Ok(_) => {
-                        info!("Dropped fine")
-                    }
-                    Err(error) => {
-                        info!("Error on cleanup: {error}, ignoring")
-                    }
+                if let Err(error) = sender.send(()).await {
+                    info!("Error on cleanup: {error}, ignoring")
                 }
             });
         }

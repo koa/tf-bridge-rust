@@ -68,7 +68,7 @@ async fn run_enumeration_listener<T: ToSocketAddrs + Debug + Send + 'static + Cl
     tinkerforge_devices: Arc<TinkerforgeDevices>,
     registered_devices: &mut HashMap<Uid, DeviceThreadTerminator>,
 ) -> Result<(), TfBridgeError> {
-    let ipcon = AsyncIpConnection::new(addr).await?;
+    let ipcon = AsyncIpConnection::new(addr.clone()).await?;
     // Enumerate
     let stream = ipcon.clone().enumerate().await?;
     pin!(stream);
@@ -92,7 +92,7 @@ async fn run_enumeration_listener<T: ToSocketAddrs + Debug + Send + 'static + Cl
                                 )
                                 .await;
                             } else {
-                                info!("Found unused LCD Device: {}", uid);
+                                info!("Found unused LCD Device {} on {addr:?}", uid);
                                 if let Err(error) = show_debug_text(
                                     Lcd128x64Bricklet::new(uid.into(), ipcon.clone()),
                                     &format!("UID: {uid}"),
@@ -117,7 +117,7 @@ async fn run_enumeration_listener<T: ToSocketAddrs + Debug + Send + 'static + Cl
                                 )
                                 .await;
                             } else {
-                                info!("Found unused DMX Bricklet: {uid}");
+                                info!("Found unused DMX Bricklet {uid} on {addr:?}");
                             }
                         }
                         Io16V2Bricklet::DEVICE_IDENTIFIER => {
@@ -134,7 +134,7 @@ async fn run_enumeration_listener<T: ToSocketAddrs + Debug + Send + 'static + Cl
                                 )
                                 .await;
                             } else {
-                                info!("Found unused IO16 Device: {uid}");
+                                info!("Found unused IO16 Device {uid} on {addr:?}");
                             }
                         }
                         MotionDetectorV2Bricklet::DEVICE_IDENTIFIER => {
@@ -150,7 +150,7 @@ async fn run_enumeration_listener<T: ToSocketAddrs + Debug + Send + 'static + Cl
                                 )
                                 .await;
                             } else {
-                                info!("Found unused Motion detector {uid}");
+                                info!("Found unused Motion detector {uid} on {addr:?}");
                             }
                         }
                         TemperatureV2Bricklet::DEVICE_IDENTIFIER => {
@@ -168,7 +168,7 @@ async fn run_enumeration_listener<T: ToSocketAddrs + Debug + Send + 'static + Cl
                                 )
                                 .await;
                             } else {
-                                info!("Found unused Temperature Sensor: {uid}");
+                                info!("Found unused Temperature Sensor {uid} on {addr:?}");
                             }
                         }
                         IndustrialQuadRelayV2Bricklet::DEVICE_IDENTIFIER => {
@@ -188,7 +188,7 @@ async fn run_enumeration_listener<T: ToSocketAddrs + Debug + Send + 'static + Cl
                                 )
                                 .await;
                             } else {
-                                info!("Found unused Relay Bricklet: {uid}");
+                                info!("Found unused Relay Bricklet {uid} on {addr:?}");
                             }
                         }
 
