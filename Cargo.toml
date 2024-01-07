@@ -7,8 +7,8 @@ edition = "2021"
 
 [dependencies]
 chrono = "0.4.31"
-tinkerforge-async = { version = "0.0.3", features = ["prometheus"] }
-tokio = { version = "1.33.0", features = ["fs"] }
+tinkerforge-async = { version = "0.0.4", features = ["prometheus"] }
+tokio = { version = "1.33.0", features = ["fs", "macros"] }
 tokio-stream = { version = "0.1.14", features = ["time", "sync"] }
 sub-array = "0.1.1"
 bitmap-font = "0.3.0"

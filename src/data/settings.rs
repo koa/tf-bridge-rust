@@ -19,7 +19,7 @@ pub struct ServerSettings {
     state_file: Option<Box<str>>,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, Clone)]
 pub struct Tinkerforge {
     endpoints: Box<[TinkerforgeEndpoint]>,
 }
@@ -30,7 +30,7 @@ impl Tinkerforge {
     }
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, Copy, Clone)]
 pub struct TinkerforgeEndpoint {
     address: IpAddr,
     port: Option<u16>,
@@ -49,6 +49,7 @@ pub struct GoogleSheet {
     key_file: Option<Box<str>>,
     key_data: Option<Box<str>>,
     spreadsheet_id: Box<str>,
+    endpoints: GoogleEndpointData,
     light: GoogleLightData,
     light_templates: GoogleLightTemplateData,
     buttons: GoogleButtonData,
@@ -56,6 +57,12 @@ pub struct GoogleSheet {
     room_controllers: GoogleRoomController,
     motion_detectors: GoogleMotionDetectors,
     relays: GoogleRelay,
+}
+#[derive(Deserialize, Debug)]
+pub struct GoogleEndpointData {
+    sheet: Box<str>,
+    range: Box<str>,
+    address: Box<str>,
 }
 #[derive(Deserialize, Debug)]
 pub struct GoogleButtonData {
@@ -192,6 +199,21 @@ impl GoogleSheet {
 
     pub fn relays(&self) -> &GoogleRelay {
         &self.relays
+    }
+
+    pub fn endpoints(&self) -> &GoogleEndpointData {
+        &self.endpoints
+    }
+}
+impl GoogleEndpointData {
+    pub fn sheet(&self) -> &str {
+        &self.sheet
+    }
+    pub fn range(&self) -> &str {
+        &self.range
+    }
+    pub fn address(&self) -> &str {
+        &self.address
     }
 }
 impl GoogleLightTemplateData {

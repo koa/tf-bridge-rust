@@ -5,6 +5,8 @@ use std::{
 };
 
 use chrono::{DateTime, Local, Timelike};
+use embedded_graphics::mono_font::iso_8859_1::FONT_10X20;
+use embedded_graphics::prelude::Dimensions;
 use embedded_graphics::{
     draw_target::DrawTarget,
     geometry::Point,
@@ -34,12 +36,13 @@ use tokio::{
 use tokio_stream::{empty, wrappers::ReceiverStream, StreamExt, StreamNotifyClose};
 use tokio_util::either::Either;
 
-use crate::data::wiring::ScreenSettings;
+use crate::data::wiring::{Orientation, ScreenSettings};
 use crate::{
     data::registry::EventRegistry, devices::display::Lcd128x64BrickletDisplay, icons, util,
 };
 
 const TEXT_STYLE: MonoTextStyle<BinaryColor> = MonoTextStyle::new(&FONT_6X12, BinaryColor::On);
+const BIG_TEXT_STYLE: MonoTextStyle<BinaryColor> = MonoTextStyle::new(&FONT_10X20, BinaryColor::On);
 
 pub struct ScreenData<
     LT: Layoutable<BinaryColor>,
@@ -394,6 +397,23 @@ enum ScreenMessage {
     UpdateBrightness(Saturating<u8>),
 }
 
+pub async fn show_debug_text(
+    bricklet: Lcd128x64Bricklet,
+    text: &str,
+) -> Result<(), ScreenDataError> {
+    let mut display = Lcd128x64BrickletDisplay::new(bricklet, Orientation::Straight).await?;
+    display.set_backlight(100).await?;
+    let content = center(Text::new(text, Point::zero(), BIG_TEXT_STYLE));
+    let rectangle = display.bounding_box();
+    content
+        .draw_placed(&mut display, rectangle)
+        .expect("Infallible");
+    if let Err(error) = display.draw().await {
+        error!("Cannot draw to bricklet {error}");
+    }
+    Ok(())
+}
+
 async fn screen_thread_loop(
     bricklet: Lcd128x64Bricklet,
     event_registry: EventRegistry,
@@ -409,7 +429,7 @@ async fn screen_thread_loop(
         brightness_key,
     } = settings;
     let mut display = Lcd128x64BrickletDisplay::new(bricklet, orientation).await?;
-    display.set_backlight(0).await?;
+    display.set_backlight(100).await?;
     let (tx, rx) = mpsc::channel(2);
 
     let er = event_registry.clone();

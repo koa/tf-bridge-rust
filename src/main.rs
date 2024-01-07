@@ -1,10 +1,10 @@
+use std::future::Future;
 use std::{collections::HashMap, error::Error, fmt::Debug, fs::File, sync::Arc, time::Duration};
 
 use actix_web::{get, App, HttpServer};
 use actix_web_prometheus::PrometheusMetricsBuilder;
 use env_logger::{Env, TimestampPrecision};
-use log::{error, info, warn};
-use prometheus::{gather, Encoder, TextEncoder};
+use log::{error, info};
 use thiserror::Error;
 use tinkerforge_async::{
     base58::Base58,
@@ -17,9 +17,13 @@ use tinkerforge_async::{
     motion_detector_v2_bricklet::MotionDetectorV2Bricklet,
     temperature_v2_bricklet::TemperatureV2Bricklet,
 };
-use tokio::{join, net::ToSocketAddrs, pin, sync::mpsc, task, task::JoinHandle, time::sleep};
+use tokio::signal::unix::{signal, SignalKind};
+use tokio::{net::ToSocketAddrs, pin, select, sync::mpsc, task, task::JoinHandle, time::sleep};
 use tokio_stream::StreamExt;
 
+use crate::data::settings::Tinkerforge;
+use crate::devices::screen_data_renderer::show_debug_text;
+use crate::terminator::{AbortHandleTerminator, DeviceThreadTerminator, JoinHandleTerminator};
 use crate::{
     controller::{
         action::ring_controller,
@@ -58,11 +62,11 @@ enum TfBridgeError {
     TinkerforgeError(#[from] TinkerforgeError),
 }
 
-async fn run_enumeration_listener<T: ToSocketAddrs>(
+async fn run_enumeration_listener<T: ToSocketAddrs + Debug + Send + 'static + Clone>(
     addr: T,
     event_registry: EventRegistry,
     tinkerforge_devices: Arc<TinkerforgeDevices>,
-    registered_devices: &mut HashMap<Uid, mpsc::Sender<()>>,
+    registered_devices: &mut HashMap<Uid, DeviceThreadTerminator>,
 ) -> Result<(), TfBridgeError> {
     let ipcon = AsyncIpConnection::new(addr).await?;
     // Enumerate
@@ -76,7 +80,6 @@ async fn run_enumeration_listener<T: ToSocketAddrs>(
                         Lcd128x64Bricklet::DEVICE_IDENTIFIER => {
                             if let Some(screen_settings) = tinkerforge_devices.lcd_screens.get(&uid)
                             {
-                                info!("Found LCD Device: {}", paket.uid);
                                 register_handle(
                                     registered_devices,
                                     uid,
@@ -88,11 +91,20 @@ async fn run_enumeration_listener<T: ToSocketAddrs>(
                                     .await,
                                 )
                                 .await;
+                            } else {
+                                info!("Found unused LCD Device: {}", uid);
+                                if let Err(error) = show_debug_text(
+                                    Lcd128x64Bricklet::new(uid.into(), ipcon.clone()),
+                                    &format!("UID: {uid}"),
+                                )
+                                .await
+                                {
+                                    error!("Cannot access device {uid}: {error}");
+                                }
                             }
                         }
                         DmxBricklet::DEVICE_IDENTIFIER => {
                             if let Some(settings) = tinkerforge_devices.dmx_bricklets.get(&uid) {
-                                info!("Found DMX Bricklet: {}", paket.uid);
                                 register_handle(
                                     registered_devices,
                                     uid,
@@ -104,11 +116,12 @@ async fn run_enumeration_listener<T: ToSocketAddrs>(
                                     .await,
                                 )
                                 .await;
+                            } else {
+                                info!("Found unused DMX Bricklet: {uid}");
                             }
                         }
                         Io16V2Bricklet::DEVICE_IDENTIFIER => {
                             if let Some(settings) = tinkerforge_devices.io_bricklets.get(&uid) {
-                                info!("Found IO 16 Bricklet: {}", paket.uid);
                                 register_handle(
                                     registered_devices,
                                     uid,
@@ -120,11 +133,12 @@ async fn run_enumeration_listener<T: ToSocketAddrs>(
                                     .await,
                                 )
                                 .await;
+                            } else {
+                                info!("Found unused IO16 Device: {uid}");
                             }
                         }
                         MotionDetectorV2Bricklet::DEVICE_IDENTIFIER => {
                             if let Some(settings) = tinkerforge_devices.motion_detectors.get(&uid) {
-                                info!("Found Motion detector Bricklet: {}", paket.uid);
                                 register_handle(
                                     registered_devices,
                                     uid,
@@ -135,13 +149,14 @@ async fn run_enumeration_listener<T: ToSocketAddrs>(
                                     ),
                                 )
                                 .await;
+                            } else {
+                                info!("Found unused Motion detector {uid}");
                             }
                         }
                         TemperatureV2Bricklet::DEVICE_IDENTIFIER => {
                             if let Some(settings) =
                                 tinkerforge_devices.temperature_sensors.get(&uid)
                             {
-                                info!("Found Temperature Bricklet: {}", paket.uid);
                                 register_handle(
                                     registered_devices,
                                     uid,
@@ -152,11 +167,12 @@ async fn run_enumeration_listener<T: ToSocketAddrs>(
                                     ),
                                 )
                                 .await;
+                            } else {
+                                info!("Found unused Temperature Sensor: {uid}");
                             }
                         }
                         IndustrialQuadRelayV2Bricklet::DEVICE_IDENTIFIER => {
                             if let Some(settings) = tinkerforge_devices.relays.get(&uid) {
-                                info!("Found Relay Bricklet: {}", paket.uid);
                                 register_handle(
                                     registered_devices,
                                     uid,
@@ -171,6 +187,8 @@ async fn run_enumeration_listener<T: ToSocketAddrs>(
                                     .await,
                                 )
                                 .await;
+                            } else {
+                                info!("Found unused Relay Bricklet: {uid}");
                             }
                         }
 
@@ -193,16 +211,14 @@ async fn run_enumeration_listener<T: ToSocketAddrs>(
 }
 
 async fn register_handle(
-    running_threads: &mut HashMap<Uid, mpsc::Sender<()>>,
+    running_threads: &mut HashMap<Uid, DeviceThreadTerminator>,
     uid: Uid,
     abort_handle: mpsc::Sender<()>,
 ) {
-    if let Some(old_handle) = running_threads.insert(uid, abort_handle) {
-        if let Err(error) = old_handle.send(()).await {
-            warn!("Cannot terminate old thread: {error}")
-        }
-    }
+    running_threads.insert(uid, DeviceThreadTerminator::new(abort_handle));
 }
+
+mod terminator;
 
 fn start_enumeration_listener<T: ToSocketAddrs + Clone + Debug + Send + Sync + 'static>(
     connection: T,
@@ -211,7 +227,7 @@ fn start_enumeration_listener<T: ToSocketAddrs + Clone + Debug + Send + Sync + '
 ) -> JoinHandle<()> {
     let connection = connection.clone();
     task::spawn(async move {
-        let mut running_threads: HashMap<Uid, mpsc::Sender<()>> = HashMap::new();
+        let mut running_threads: HashMap<Uid, DeviceThreadTerminator> = HashMap::new();
 
         let socket_str = format!("{connection:?}");
         loop {
@@ -265,116 +281,223 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let event_registry = EventRegistry::new(initial_snapshot);
 
-    start_snapshot_thread(&event_registry, state_file);
-
-    let wiring = if let Some(google_data) = match read_sheet_data().await {
-        Ok(data) => {
-            serde_yaml::to_writer(File::create(setup_file)?, &data)?;
-            data
+    let snapshot_storage_thread = start_snapshot_thread(&event_registry, state_file);
+    //let (tx, mut rx) = mpsc::channel(1);
+    //let mgmt_tx = tx.clone();
+    /* tokio::spawn(async move {
+        match mgmt_server.await {
+            Ok(_) => {
+                info!("Management server terminated normally");
+            }
+            Err(error) => {
+                error!("Management Server terminated with error: {error}");
+            }
         }
-        Err(error) => {
-            error!("Cannot read config from google: {error}");
-            None
-        }
-    } {
-        google_data
-    } else {
-        serde_yaml::from_reader(File::open(setup_file)?)?
-    };
+        report_send_error(mgmt_tx.send(()).await);
+    });*/
 
-    let Wiring {
-        controllers:
-            Controllers {
+    //let cfg_tx = tx.clone();
+    /*
+    let config_updater = tokio::spawn(async move {
+        match config_update_loop(tinkerforge, setup_file, event_registry).await {
+            Ok(_) => {}
+            Err(error) => {
+                error!("Config load failed: {error}")
+            }
+        };
+        report_send_error(cfg_tx.send(()).await);
+    });*/
+    let mut terminate_signal = signal(SignalKind::terminate())?;
+    let config_update_future = config_update_loop(tinkerforge, setup_file, event_registry);
+    select! {
+        _ = snapshot_storage_thread =>{info!("Snapshot storage thread terminated");}
+        status =
+             mgmt_server =>{ match status {
+                     Ok(_) => {
+                info!("Management server terminated normally");
+            }
+            Err(error) => {
+                error!("Management Server terminated with error: {error}");
+            }}
+            }
+        status = config_update_future =>{
+                match status{
+                          Ok(_) => {}
+            Err(error) => {
+                error!("Config load failed: {error}")
+            }
+                }
+            }
+        _ = terminate_signal.recv() =>{
+            info!("Terminated by signal");
+        }
+    }
+    Ok(())
+}
+
+async fn config_update_loop(
+    tinkerforge: &Tinkerforge,
+    setup_file: &str,
+    event_registry: EventRegistry,
+) -> Result<(), Box<dyn Error>> {
+    let mut current_wiring = Wiring::default();
+    let mut running_controllers = Vec::new();
+    let mut running_connections = Vec::new();
+
+    loop {
+        let wiring = fetch_config(setup_file).await?;
+        if wiring == current_wiring {
+            info!("Configuration unchanged");
+            sleep(Duration::from_secs(5 * 60)).await;
+            continue;
+        }
+        if wiring.controllers != current_wiring.controllers {
+            info!("Terminating running controllers");
+            running_controllers.clear();
+            let Controllers {
                 dual_input_dimmers,
                 dual_input_switches,
                 motion_detectors,
                 heat_controllers,
                 ring_controllers,
-            },
-        tinkerforge_devices,
-    } = wiring;
-
-    for dimmer_cfg in dual_input_dimmers.iter() {
-        dual_input_dimmer(
-            &event_registry,
-            dimmer_cfg.input.as_ref(),
-            dimmer_cfg.output,
-            dimmer_cfg.auto_switch_off_time,
-            dimmer_cfg.presence.as_ref(),
-        )
-        .await;
-    }
-    for switch_cfg in dual_input_switches.iter() {
-        dual_input_switch(
-            &event_registry,
-            switch_cfg.input.as_ref(),
-            switch_cfg.output,
-            switch_cfg.auto_switch_off_time,
-            switch_cfg.presence.as_ref(),
-        )
-        .await;
-    }
-    for motion_detector_cfg in motion_detectors.iter() {
-        match motion_detector_cfg {
-            MotionDetector::Switch {
-                input,
-                output,
-                switch_off_time,
-            } => motion_detector(&event_registry, input.as_ref(), *output, *switch_off_time).await,
-            MotionDetector::Dimmer {
-                input,
-                output,
-                brightness,
-                switch_off_time,
-            } => {
-                motion_detector_dimmer(
-                    &event_registry,
-                    input.as_ref(),
-                    *brightness,
-                    *output,
-                    *switch_off_time,
-                )
-                .await
+            } = wiring.controllers.clone();
+            for dimmer_cfg in dual_input_dimmers.iter() {
+                running_controllers.push(AbortHandleTerminator::new(
+                    dual_input_dimmer(
+                        &event_registry,
+                        dimmer_cfg.input.as_ref(),
+                        dimmer_cfg.output,
+                        dimmer_cfg.auto_switch_off_time,
+                        dimmer_cfg.presence.as_ref(),
+                    )
+                    .await,
+                ));
             }
-        };
-    }
-    for cfg in heat_controllers.iter() {
-        heat_controller(
-            &event_registry,
-            cfg.current_value_input,
-            cfg.target_value_input,
-            cfg.output,
-        )
-        .await;
-    }
-    for cfg in ring_controllers.iter() {
-        ring_controller(&event_registry, cfg.input, cfg.output).await;
-    }
-    let tinkerforge_devices = Arc::new(tinkerforge_devices);
+            for switch_cfg in dual_input_switches.iter() {
+                running_controllers.push(AbortHandleTerminator::new(
+                    dual_input_switch(
+                        &event_registry,
+                        switch_cfg.input.as_ref(),
+                        switch_cfg.output,
+                        switch_cfg.auto_switch_off_time,
+                        switch_cfg.presence.as_ref(),
+                    )
+                    .await,
+                ));
+            }
+            for motion_detector_cfg in motion_detectors.iter() {
+                running_controllers.push(AbortHandleTerminator::new(match motion_detector_cfg {
+                    MotionDetector::Switch {
+                        input,
+                        output,
+                        switch_off_time,
+                    } => {
+                        motion_detector(&event_registry, input.as_ref(), *output, *switch_off_time)
+                            .await
+                    }
+                    MotionDetector::Dimmer {
+                        input,
+                        output,
+                        brightness,
+                        switch_off_time,
+                    } => {
+                        motion_detector_dimmer(
+                            &event_registry,
+                            input.as_ref(),
+                            *brightness,
+                            *output,
+                            *switch_off_time,
+                        )
+                        .await
+                    }
+                }));
+            }
+            for cfg in heat_controllers.iter() {
+                running_controllers.push(AbortHandleTerminator::new(
+                    heat_controller(
+                        &event_registry,
+                        cfg.current_value_input,
+                        cfg.target_value_input,
+                        cfg.output,
+                    )
+                    .await,
+                ));
+            }
+            for cfg in ring_controllers.iter() {
+                running_controllers.push(AbortHandleTerminator::new(
+                    ring_controller(&event_registry, cfg.input, cfg.output).await,
+                ));
+            }
+            info!("Controllers updated");
+        }
+        if wiring.tinkerforge_devices != current_wiring.tinkerforge_devices {
+            info!("Tinkerforge devices changed");
+            running_connections.clear();
+            let tinkerforge_devices = Arc::new(wiring.tinkerforge_devices.clone());
 
-    for endpoint in tinkerforge.endpoints() {
-        start_enumeration_listener(
-            (endpoint.address(), endpoint.port()),
-            event_registry.clone(),
-            tinkerforge_devices.clone(),
-        );
+            for handle in (if tinkerforge.endpoints().is_empty() {
+                tinkerforge_devices
+                    .endpoints
+                    .iter()
+                    .map(|ip| {
+                        start_enumeration_listener(
+                            (*ip, 4223),
+                            event_registry.clone(),
+                            tinkerforge_devices.clone(),
+                        )
+                    })
+                    .collect::<Vec<_>>()
+            } else {
+                tinkerforge
+                    .endpoints()
+                    .iter()
+                    .map(|ep| {
+                        start_enumeration_listener(
+                            (ep.address(), ep.port()),
+                            event_registry.clone(),
+                            tinkerforge_devices.clone(),
+                        )
+                    })
+                    .collect()
+            })
+            .into_iter()
+            {
+                running_connections.push(JoinHandleTerminator::new(handle));
+            }
+        }
+
+        current_wiring = wiring;
+        info!("Reloaded new configuration");
+
+        sleep(Duration::from_secs(10)).await;
     }
-
-    let mut buffer = vec![];
-    let encoder = TextEncoder::new();
-    let metrics = gather();
-    encoder.encode(&metrics, &mut buffer).unwrap();
-
-    // Output to the standard output.
-    println!("{}", String::from_utf8(buffer).unwrap());
-
-    join!(mgmt_server).0?;
-    Ok(())
 }
 
-fn start_snapshot_thread(event_registry: &EventRegistry, state_file: &'static str) {
+async fn fetch_config(setup_file: &str) -> Result<Wiring, Box<dyn Error>> {
+    Ok(
+        if let Some(google_data) = match read_sheet_data().await {
+            Ok(data) => {
+                serde_yaml::to_writer(File::create(setup_file)?, &data)?;
+                data
+            }
+            Err(error) => {
+                error!("Cannot read config from google: {error}");
+                None
+            }
+        } {
+            google_data
+        } else {
+            serde_yaml::from_reader(File::open(setup_file)?)?
+        },
+    )
+}
+
+fn start_snapshot_thread(
+    event_registry: &EventRegistry,
+    state_file: &'static str,
+) -> impl Future<Output = ()> {
     let event_registry = event_registry.clone();
-    tokio::spawn(async move {
+    async move {
         let mut last_snapshot = Default::default();
         loop {
             sleep(Duration::from_secs(10)).await;
@@ -390,7 +513,7 @@ fn start_snapshot_thread(event_registry: &EventRegistry, state_file: &'static st
             }
             last_snapshot = snapshot;
         }
-    });
+    }
 }
 
 mod snapshot;

@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+use std::net::IpAddr;
 use std::{
     borrow::Cow,
     collections::{HashMap, HashSet},
@@ -61,6 +63,8 @@ pub enum GoogleDataError {
     MotionDetectorHeader(HeaderError),
     #[error("Error parsing relays header: {0}")]
     RelayHeader(HeaderError),
+    #[error("Error parsing endpoints header: {0}")]
+    EndpointsHeader(HeaderError),
 }
 
 enum LightTemplateTypes {
@@ -98,6 +102,7 @@ pub async fn read_sheet_data() -> Result<Option<Wiring>, GoogleDataError> {
 
         let hub = Sheets::new(client, auth);
 
+        let endpoints_config = config.endpoints();
         let light_template_config = config.light_templates();
         let light_config = config.light();
         let button_template_config = config.button_templates();
@@ -111,6 +116,11 @@ pub async fn read_sheet_data() -> Result<Option<Wiring>, GoogleDataError> {
             .get(config.spreadsheet_id())
             .add_scope("https://www.googleapis.com/auth/spreadsheets")
             .include_grid_data(true)
+            .add_ranges(&format!(
+                "{}!{}",
+                endpoints_config.sheet(),
+                endpoints_config.range()
+            ))
             .add_ranges(&format!(
                 "{}!{}",
                 room_controller_config.sheet(),
@@ -148,12 +158,13 @@ pub async fn read_sheet_data() -> Result<Option<Wiring>, GoogleDataError> {
             ))
             .doit()
             .await?;
-        let mut io_bricklets = HashMap::<_, Vec<_>>::new();
-        let mut dmx_bricklets = HashMap::<_, Vec<_>>::new();
-        let mut lcd_screens = HashMap::new();
-        let mut temperature_sensors = HashMap::new();
-        let mut motion_detector_sensors = HashMap::new();
-        let mut relays = HashMap::new();
+        let mut io_bricklets = BTreeMap::<_, Vec<_>>::new();
+        let mut dmx_bricklets = BTreeMap::<_, Vec<_>>::new();
+        let mut lcd_screens = BTreeMap::new();
+        let mut temperature_sensors = BTreeMap::new();
+        let mut motion_detector_sensors = BTreeMap::new();
+        let mut relays = BTreeMap::new();
+        let mut endpoints = Vec::new();
 
         let mut dual_input_dimmers = Vec::new();
         let mut dual_input_switches = Vec::new();
@@ -167,6 +178,8 @@ pub async fn read_sheet_data() -> Result<Option<Wiring>, GoogleDataError> {
         let mut touchscreen_whitebalance_addresses = HashMap::new();
         let mut touchscreen_brightness_addresses = HashMap::new();
         let mut motion_detector_adresses = HashMap::new();
+
+        parse_endpoints(config, &sheet, &mut endpoints).await?;
         parse_buttons(
             config,
             button_template_config,
@@ -222,6 +235,12 @@ pub async fn read_sheet_data() -> Result<Option<Wiring>, GoogleDataError> {
             &mut heat_outputs_addresses,
         )
         .await?;
+        dual_input_dimmers.sort();
+        dual_input_switches.sort();
+        motion_detectors.sort();
+        heat_controllers.sort();
+        ring_controllers.sort();
+        endpoints.sort();
         Some(Wiring {
             controllers: Controllers {
                 dual_input_dimmers: dual_input_dimmers.into_boxed_slice(),
@@ -231,10 +250,12 @@ pub async fn read_sheet_data() -> Result<Option<Wiring>, GoogleDataError> {
                 ring_controllers: ring_controllers.into_boxed_slice(),
             },
             tinkerforge_devices: TinkerforgeDevices {
+                endpoints: endpoints.into_boxed_slice(),
                 lcd_screens,
                 dmx_bricklets: dmx_bricklets
                     .into_iter()
-                    .map(|(uid, settings)| {
+                    .map(|(uid, mut settings)| {
+                        settings.sort();
                         (
                             uid,
                             DmxSettings {
@@ -245,7 +266,8 @@ pub async fn read_sheet_data() -> Result<Option<Wiring>, GoogleDataError> {
                     .collect(),
                 io_bricklets: io_bricklets
                     .into_iter()
-                    .map(|(uid, settings)| {
+                    .map(|(uid, mut settings)| {
+                        settings.sort();
                         (
                             uid,
                             IoSettings {
@@ -265,11 +287,35 @@ pub async fn read_sheet_data() -> Result<Option<Wiring>, GoogleDataError> {
     Ok(x)
 }
 
+async fn parse_endpoints(
+    config: &GoogleSheet,
+    sheet: &Spreadsheet,
+    endpoints: &mut Vec<IpAddr>,
+) -> Result<(), GoogleDataError> {
+    let endpoints_config = config.endpoints();
+    if let Some(endpoint_grid) = find_sheet_by_name(sheet, endpoints_config.sheet()) {
+        let (_, _, mut rows) = get_grid_and_coordinates(endpoint_grid);
+        if let Some((_, header)) = rows.next() {
+            let [address_column] = parse_headers(header, [endpoints_config.address()])
+                .map_err(GoogleDataError::EndpointsHeader)?;
+            while let Some((_, row)) = rows.next() {
+                if let Some(address) = get_cell_content(row, address_column)
+                    .map(IpAddr::from_str)
+                    .and_then(Result::ok)
+                {
+                    endpoints.push(address);
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 async fn parse_relays<'a>(
     config: &'a GoogleSheet,
     spreadsheet_methods: &SpreadsheetMethods<'_, HttpsConnector<HttpConnector>>,
     sheet: &Spreadsheet,
-    relays: &mut HashMap<Uid, RelaySettings>,
+    relays: &mut BTreeMap<Uid, RelaySettings>,
     ring_controllers: &mut Vec<RingController>,
     single_buttons: &mut HashMap<Cow<'a, str>, SingleButtonKey>,
     heating_outputs: &mut HashMap<&str, SwitchOutputKey>,
@@ -402,8 +448,8 @@ async fn parse_controllers<'a>(
     config: &GoogleSheet,
     spreadsheet_methods: &SpreadsheetMethods<'_, HttpsConnector<HttpConnector>>,
     sheet: &'a Spreadsheet,
-    lcd_screens: &mut HashMap<Uid, ScreenSettings>,
-    temperature_sensors: &mut HashMap<Uid, TemperatureSettings>,
+    lcd_screens: &mut BTreeMap<Uid, ScreenSettings>,
+    temperature_sensors: &mut BTreeMap<Uid, TemperatureSettings>,
     heat_controllers: &mut Vec<HeatController>,
     heat_outputs: &mut HashMap<&'a str, SwitchOutputKey>,
     touchscreen_whitebalances: &mut HashMap<&'a str, LightColorKey>,
@@ -578,7 +624,7 @@ async fn parse_motion_detectors<'a>(
     config: &GoogleSheet,
     spreadsheet_methods: &SpreadsheetMethods<'_, HttpsConnector<HttpConnector>>,
     sheet: &'a Spreadsheet,
-    motion_detectors: &mut HashMap<Uid, MotionDetectorSettings>,
+    motion_detectors: &mut BTreeMap<Uid, MotionDetectorSettings>,
     single_button_adresses: &mut HashMap<&'a str, SingleButtonKey>,
 ) -> Result<(), GoogleDataError> {
     struct MotionDetectorRow<'a> {
@@ -658,7 +704,7 @@ async fn parse_lights<'a>(
     config: &GoogleSheet,
     spreadsheet_methods: &SpreadsheetMethods<'_, HttpsConnector<HttpConnector>>,
     sheet: &'a Spreadsheet,
-    dmx_bricklets: &mut HashMap<Uid, Vec<DmxConfigEntry>>,
+    dmx_bricklets: &mut BTreeMap<Uid, Vec<DmxConfigEntry>>,
     dual_input_dimmers: &mut Vec<DualInputDimmer>,
     dual_input_switches: &mut Vec<DualInputSwitch>,
     motion_detector_controllers: &mut Vec<MotionDetector>,
@@ -840,20 +886,22 @@ async fn parse_lights<'a>(
                     dmx_bricklets.entry(light_row.device_address).or_default();
                 let template = light_row.light_template;
 
-                let manual_buttons = light_row
+                let mut manual_buttons = light_row
                     .manual_buttons
                     .iter()
                     .flat_map(|name| dual_button_adresses.get(*name))
                     .copied()
                     .collect::<Vec<_>>()
                     .into_boxed_slice();
-                let presence_detectors = light_row
+                manual_buttons.sort();
+                let mut presence_detectors = light_row
                     .presence_detectors
                     .iter()
                     .flat_map(|name| motion_detector_adresses.get(*name))
                     .copied()
                     .collect::<Vec<_>>()
                     .into_boxed_slice();
+                presence_detectors.sort();
                 let auto_switch_off_time = if manual_buttons.is_empty() {
                     Duration::from_secs(2 * 60)
                 } else if presence_detectors.is_empty() {
@@ -1039,7 +1087,7 @@ async fn parse_buttons<'a>(
     button_config: &GoogleButtonData,
     spreadsheet_methods: &SpreadsheetMethods<'_, HttpsConnector<HttpConnector>>,
     sheet: &'a Spreadsheet,
-    io_bricklets: &mut HashMap<Uid, Vec<ButtonSetting>>,
+    io_bricklets: &mut BTreeMap<Uid, Vec<ButtonSetting>>,
     single_button_adresses: &mut HashMap<Cow<'a, str>, SingleButtonKey>,
     dual_button_adresses: &mut HashMap<Cow<'a, str>, DualButtonKey>,
 ) -> Result<(), GoogleDataError> {

@@ -17,22 +17,22 @@ pub mod registry;
 pub mod settings;
 pub mod wiring;
 
-#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Default)]
+#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Default, Ord, PartialOrd)]
 pub struct Room {
     pub floor: i16,
     pub room: u16,
 }
 
-#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Default)]
+#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Default, Ord, PartialOrd)]
 pub struct Uid(u32);
 
-#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Default, Serialize, Deserialize)]
+#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Default, Serialize, Deserialize, Ord, PartialOrd)]
 pub struct DeviceInRoom {
     pub room: Room,
     pub idx: u16,
 }
 
-#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Default, Serialize, Deserialize)]
+#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Default, Serialize, Deserialize, Ord, PartialOrd)]
 pub struct SubDeviceInRoom {
     pub room: Room,
     pub device_idx: u16,

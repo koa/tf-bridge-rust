@@ -15,7 +15,7 @@ pub trait TypedKey {
     type Value;
 }
 
-#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Serialize, Deserialize)]
+#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Serialize, Deserialize, Ord, PartialOrd)]
 pub enum ClockKey {
     MinuteClock,
     SecondClock,
@@ -24,7 +24,7 @@ impl TypedKey for ClockKey {
     type Value = DateTime<Local>;
 }
 
-#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Serialize, Deserialize)]
+#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Serialize, Deserialize, Ord, PartialOrd)]
 pub enum TemperatureKey {
     CurrentTemperature(DeviceInRoom),
     TargetTemperature(DeviceInRoom),
@@ -33,27 +33,27 @@ impl TypedKey for TemperatureKey {
     type Value = f32;
 }
 
-#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Serialize, Deserialize)]
+#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Serialize, Deserialize, Ord, PartialOrd)]
 pub enum LightColorKey {
     Light(DeviceInRoom),
     TouchscreenController(DeviceInRoom),
 }
-#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Serialize, Deserialize)]
+#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Serialize, Deserialize, Ord, PartialOrd)]
 pub enum BrightnessKey {
     Light(DeviceInRoom),
     TouchscreenController(DeviceInRoom),
 }
 
-#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Serialize, Deserialize)]
+#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Serialize, Deserialize, Ord, PartialOrd)]
 pub enum SwitchOutputKey {
     Light(DeviceInRoom),
     Heat(DeviceInRoom),
     Bell(DeviceInRoom),
 }
 
-#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Serialize, Deserialize)]
+#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Serialize, Deserialize, Ord, PartialOrd)]
 pub struct DualButtonKey(pub SubDeviceInRoom);
-#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Serialize, Deserialize)]
+#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Serialize, Deserialize, Ord, PartialOrd)]
 pub enum SingleButtonKey {
     Button(SubDeviceInRoom),
     MotionDetector(DeviceInRoom),
@@ -65,12 +65,14 @@ pub enum ButtonState<B: Copy + Clone + Eq + Hash> {
     ShortPressStart(B),
     LongPressStart(B),
 }
-#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Serialize, Deserialize)]
+#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Serialize, Deserialize, Ord, PartialOrd)]
 pub enum DualButtonLayout {
     Up,
     Down,
 }
-#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Default, Serialize, Deserialize)]
+#[derive(
+    Copy, Clone, Eq, PartialEq, Hash, Debug, Default, Serialize, Deserialize, Ord, PartialOrd,
+)]
 pub struct SingleButtonLayout;
 pub trait KeyAccess<K: TypedKey<Value = V>, V: Clone + Sync + Send + 'static> {
     async fn register_access<

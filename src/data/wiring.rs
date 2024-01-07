@@ -1,4 +1,5 @@
-use std::collections::HashMap;
+use std::collections::BTreeMap;
+use std::net::IpAddr;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -25,21 +26,21 @@ pub struct Controllers {
     pub ring_controllers: Box<[RingController]>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Ord, PartialOrd)]
 pub struct DualInputDimmer {
     pub input: Box<[DualButtonKey]>,
     pub output: BrightnessKey,
     pub auto_switch_off_time: Duration,
     pub presence: Box<[SingleButtonKey]>,
 }
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Ord, PartialOrd)]
 pub struct DualInputSwitch {
     pub input: Box<[DualButtonKey]>,
     pub output: SwitchOutputKey,
     pub auto_switch_off_time: Duration,
     pub presence: Box<[SingleButtonKey]>,
 }
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Ord, PartialOrd)]
 pub enum MotionDetector {
     Switch {
         input: Box<[SingleButtonKey]>,
@@ -53,28 +54,29 @@ pub enum MotionDetector {
         switch_off_time: Duration,
     },
 }
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Ord, PartialOrd)]
 pub struct HeatController {
     pub current_value_input: TemperatureKey,
     pub target_value_input: TemperatureKey,
     pub output: SwitchOutputKey,
 }
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Ord, PartialOrd)]
 pub struct RingController {
     pub input: SingleButtonKey,
     pub output: SwitchOutputKey,
 }
-#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, Ord, PartialOrd)]
 pub struct TinkerforgeDevices {
-    pub lcd_screens: HashMap<Uid, ScreenSettings>,
-    pub dmx_bricklets: HashMap<Uid, DmxSettings>,
-    pub io_bricklets: HashMap<Uid, IoSettings>,
-    pub motion_detectors: HashMap<Uid, MotionDetectorSettings>,
-    pub relays: HashMap<Uid, RelaySettings>,
-    pub temperature_sensors: HashMap<Uid, TemperatureSettings>,
+    pub endpoints: Box<[IpAddr]>,
+    pub lcd_screens: BTreeMap<Uid, ScreenSettings>,
+    pub dmx_bricklets: BTreeMap<Uid, DmxSettings>,
+    pub io_bricklets: BTreeMap<Uid, IoSettings>,
+    pub motion_detectors: BTreeMap<Uid, MotionDetectorSettings>,
+    pub relays: BTreeMap<Uid, RelaySettings>,
+    pub temperature_sensors: BTreeMap<Uid, TemperatureSettings>,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Ord, PartialOrd)]
 pub struct ScreenSettings {
     pub orientation: Orientation,
     pub clock_key: Option<ClockKey>,
@@ -83,19 +85,19 @@ pub struct ScreenSettings {
     pub light_color_key: Option<LightColorKey>,
     pub brightness_key: Option<BrightnessKey>,
 }
-#[derive(Copy, Clone, Debug, Eq, PartialEq, EnumIter, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, EnumIter, Serialize, Deserialize, Ord, PartialOrd)]
 pub enum Orientation {
     Straight,
     LeftDown,
     UpsideDown,
     RightDown,
 }
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Ord, PartialOrd)]
 pub struct DmxSettings {
     pub entries: Box<[DmxConfigEntry]>,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Ord, PartialOrd)]
 pub enum DmxConfigEntry {
     Dimm {
         register: BrightnessKey,
@@ -115,11 +117,11 @@ pub enum DmxConfigEntry {
     },
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Ord, PartialOrd)]
 pub struct IoSettings {
     pub entries: Box<[ButtonSetting]>,
 }
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Ord, PartialOrd)]
 pub enum ButtonSetting {
     Dual {
         up_button: u8,
@@ -131,27 +133,28 @@ pub enum ButtonSetting {
         output: SingleButtonKey,
     },
 }
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Ord, PartialOrd)]
 pub struct MotionDetectorSettings {
     pub output: SingleButtonKey,
 }
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Ord, PartialOrd)]
 pub struct RelaySettings {
     pub entries: Box<[RelayChannelEntry]>,
 }
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Ord, PartialOrd)]
 pub struct RelayChannelEntry {
     pub channel: u8,
     pub input: SwitchOutputKey,
 }
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Ord, PartialOrd)]
 pub struct TemperatureSettings {
     pub output: TemperatureKey,
 }
 
 #[cfg(test)]
 mod test {
-    use std::collections::HashMap;
+    use std::collections::{BTreeMap, HashMap};
+    use std::net::{IpAddr, Ipv4Addr};
     use std::time::Duration;
 
     use crate::data::registry::{BrightnessKey, DualButtonKey, LightColorKey};
@@ -177,8 +180,9 @@ mod test {
                 ring_controllers: Box::new([]),
             },
             tinkerforge_devices: TinkerforgeDevices {
+                endpoints: Box::new([IpAddr::V4(Ipv4Addr::LOCALHOST)]),
                 lcd_screens: Default::default(),
-                dmx_bricklets: HashMap::from([(
+                dmx_bricklets: BTreeMap::from([(
                     "EHc".parse().unwrap(),
                     DmxSettings {
                         entries: Box::new([
