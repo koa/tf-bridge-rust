@@ -429,7 +429,7 @@ async fn screen_thread_loop(
         brightness_key,
     } = settings;
     let mut display = Lcd128x64BrickletDisplay::new(bricklet, orientation).await?;
-    display.set_backlight(100).await?;
+    display.set_backlight(0).await?;
     let (tx, rx) = mpsc::channel(2);
 
     let er = event_registry.clone();
