@@ -24,6 +24,12 @@ impl Drop for DeviceThreadTerminator {
 
 pub struct JoinHandleTerminator<T>(JoinHandle<T>);
 
+impl<T> From<JoinHandle<T>> for JoinHandleTerminator<T> {
+    fn from(value: JoinHandle<T>) -> Self {
+        Self(value)
+    }
+}
+
 impl<T> JoinHandleTerminator<T> {
     pub fn new(handle: JoinHandle<T>) -> Self {
         Self(handle)

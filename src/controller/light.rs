@@ -4,7 +4,7 @@ use futures::stream::SelectAll;
 use log::error;
 use tokio::{
     sync::mpsc::{self, error::SendError, Sender},
-    task::{AbortHandle, JoinHandle},
+    task::AbortHandle,
     time::sleep,
 };
 use tokio_stream::{wrappers::ReceiverStream, Stream, StreamExt};
@@ -13,6 +13,7 @@ use crate::data::registry::{
     BrightnessKey, ButtonState, DualButtonKey, DualButtonLayout, EventRegistry, SingleButtonKey,
     SingleButtonLayout, SwitchOutputKey,
 };
+use crate::terminator::JoinHandleTerminator;
 use crate::util::optional_stream;
 
 pub async fn dual_input_dimmer(
@@ -125,9 +126,12 @@ pub async fn motion_detector(
     switch_off_time: Duration,
 ) -> AbortHandle {
     let sender = event_registry.switch_sender(output).await;
+    let current_value = event_registry.switch_stream(output).await.next().await;
     let input_stream = create_presences_stream(event_registry, inputs).await;
     tokio::spawn(async move {
-        if let Err(error) = motion_detector_task(switch_off_time, sender, input_stream).await {
+        if let Err(error) =
+            motion_detector_task(switch_off_time, sender, input_stream, current_value).await
+        {
             error!("Failed motion detector: {error}")
         }
     })
@@ -140,6 +144,7 @@ pub async fn motion_detector_dimmer(
     output: BrightnessKey,
     switch_off_time: Duration,
 ) -> AbortHandle {
+    let current_brightness = event_registry.brightness_stream(output).await.next().await;
     let sender = event_registry.brightness_sender(output).await;
     let input_stream = create_presences_stream(event_registry, inputs).await.merge(
         optional_stream(brightness.map(|k| event_registry.brightness_stream(k)))
@@ -147,7 +152,9 @@ pub async fn motion_detector_dimmer(
             .map(DimmerEvent::SetBrightness),
     );
     tokio::spawn(async move {
-        if let Err(error) = motion_detector_dimmer_task(switch_off_time, sender, input_stream).await
+        if let Err(error) =
+            motion_detector_dimmer_task(switch_off_time, sender, input_stream, current_brightness)
+                .await
         {
             error!("Failed motion detector: {error}")
         }
@@ -159,13 +166,23 @@ async fn motion_detector_dimmer_task(
     auto_switch_off_time: Duration,
     output_sender: Sender<Saturating<u8>>,
     input_stream: impl Stream<Item = DimmerEvent<SingleButtonLayout>> + Sized + Unpin,
+    current_brightness: Option<Saturating<u8>>,
 ) -> Result<(), SendError<Saturating<u8>>> {
     let (tx, rx) = mpsc::channel(2);
 
-    let mut timer_handle = None::<JoinHandle<()>>;
+    let mut timer_handle = None::<JoinHandleTerminator<()>>;
     output_sender.send(Saturating(0)).await?;
     let mut on_brightness = Saturating(255);
     let mut light_enabled = false;
+    if let Some(br) = current_brightness {
+        if br.0 > 0 {
+            light_enabled = true;
+            on_brightness = br;
+            start_switchoff_timer(auto_switch_off_time, &mut timer_handle, &tx);
+        } else {
+            light_enabled = false;
+        }
+    }
     let mut input_stream = input_stream.merge(ReceiverStream::new(rx));
     while let Some(event) = input_stream.next().await {
         match event {
@@ -178,18 +195,7 @@ async fn motion_detector_dimmer_task(
             DimmerEvent::PresenceDetected => {
                 output_sender.send(on_brightness).await?;
                 light_enabled = true;
-                let tx = tx.clone();
-                if let Some(handle) = timer_handle.replace(tokio::spawn(async move {
-                    loop {
-                        sleep(auto_switch_off_time).await;
-                        if let Err(error) = tx.send(DimmerEvent::AutoSwitchOff).await {
-                            error!("Error sending switchoff: {error}");
-                            break;
-                        }
-                    }
-                })) {
-                    handle.abort();
-                }
+                start_switchoff_timer(auto_switch_off_time, &mut timer_handle, &tx);
             }
             DimmerEvent::SetBrightness(br) => {
                 on_brightness = br;
@@ -201,15 +207,41 @@ async fn motion_detector_dimmer_task(
     }
     Ok(())
 }
+
+fn start_switchoff_timer<T: Copy + Eq + Hash + Send + 'static>(
+    auto_switch_off_time: Duration,
+    timer_handle: &mut Option<JoinHandleTerminator<()>>,
+    tx: &Sender<DimmerEvent<T>>,
+) {
+    let tx = tx.clone();
+    timer_handle.replace(
+        tokio::spawn(async move {
+            loop {
+                sleep(auto_switch_off_time).await;
+                if let Err(error) = tx.send(DimmerEvent::<T>::AutoSwitchOff).await {
+                    error!("Error sending switchoff: {error}");
+                    break;
+                }
+            }
+        })
+        .into(),
+    );
+}
+
 async fn motion_detector_task(
     auto_switch_off_time: Duration,
     output_sender: Sender<bool>,
     input_stream: impl Stream<Item = DimmerEvent<SingleButtonLayout>> + Sized + Unpin,
+    current_value: Option<bool>,
 ) -> Result<(), SendError<bool>> {
     let (tx, rx) = mpsc::channel(2);
 
-    let mut timer_handle = None::<JoinHandle<()>>;
-    output_sender.send(false).await?;
+    let mut timer_handle = None::<JoinHandleTerminator<()>>;
+    if let Some(current_state) = current_value {
+        if current_state {
+            start_switchoff_timer(auto_switch_off_time, &mut timer_handle, &tx);
+        }
+    }
     let mut input_stream = input_stream.merge(ReceiverStream::new(rx));
     while let Some(event) = input_stream.next().await {
         match event {
@@ -220,18 +252,7 @@ async fn motion_detector_task(
             }
             DimmerEvent::PresenceDetected => {
                 output_sender.send(true).await?;
-                let tx = tx.clone();
-                if let Some(handle) = timer_handle.replace(tokio::spawn(async move {
-                    loop {
-                        sleep(auto_switch_off_time).await;
-                        if let Err(error) = tx.send(DimmerEvent::AutoSwitchOff).await {
-                            error!("Error sending switchoff: {error}");
-                            break;
-                        }
-                    }
-                })) {
-                    handle.abort();
-                }
+                start_switchoff_timer(auto_switch_off_time, &mut timer_handle, &tx);
             }
             DimmerEvent::SetBrightness(_) => {}
         }
@@ -258,7 +279,10 @@ async fn dual_input_dimmer_task(
     let mut last_on_brightness = current_brightness;
     let mut is_long_press = false;
     let mut last_button = None;
-    let mut dimm_timer_handle = None::<JoinHandle<()>>;
+    let mut dimm_timer_handle = None::<JoinHandleTerminator<()>>;
+    if current_brightness.0 > 0 {
+        start_switchoff_timer(auto_switch_off_time, &mut dimm_timer_handle, &tx);
+    }
 
     let mut input_stream = input_stream.merge(ReceiverStream::new(rx));
     while let Some(event) = input_stream.next().await {
@@ -286,9 +310,9 @@ async fn dual_input_dimmer_task(
                 }
                 last_button = None;
                 if current_brightness.0 > 0 {
-                    reset_auto_switchoff_timer(auto_switch_off_time, &tx, &mut dimm_timer_handle);
+                    start_switchoff_timer(auto_switch_off_time, &mut dimm_timer_handle, &tx);
                 } else {
-                    clear_timer(&mut dimm_timer_handle)
+                    dimm_timer_handle.take();
                 }
             }
             DimmerEvent::ButtonState(ButtonState::ShortPressStart(button)) => {
@@ -299,17 +323,18 @@ async fn dual_input_dimmer_task(
                 is_long_press = true;
                 last_button = Some(button);
                 let tx = tx.clone();
-                if let Some(handle) = dimm_timer_handle.replace(tokio::spawn(async move {
-                    loop {
-                        sleep(Duration::from_millis(10)).await;
-                        if let Err(error) = tx.send(DimmerEvent::KeepPressing(button)).await {
-                            error!("Error sending dim events: {error}");
-                            break;
+                dimm_timer_handle.replace(
+                    tokio::spawn(async move {
+                        loop {
+                            sleep(Duration::from_millis(10)).await;
+                            if let Err(error) = tx.send(DimmerEvent::KeepPressing(button)).await {
+                                error!("Error sending dim events: {error}");
+                                break;
+                            }
                         }
-                    }
-                })) {
-                    handle.abort();
-                }
+                    })
+                    .into(),
+                );
             }
             DimmerEvent::KeepPressing(button) => {
                 match button {
@@ -328,7 +353,7 @@ async fn dual_input_dimmer_task(
             }
             DimmerEvent::PresenceDetected => {
                 if current_brightness.0 > 0 {
-                    reset_auto_switchoff_timer(auto_switch_off_time, &tx, &mut dimm_timer_handle);
+                    start_switchoff_timer(auto_switch_off_time, &mut dimm_timer_handle, &tx);
                 }
             }
             DimmerEvent::SetBrightness(_) => {}
@@ -346,7 +371,10 @@ async fn dual_input_switch_task(
     let (tx, rx) = mpsc::channel(2);
     let mut input_stream = input_stream.merge(ReceiverStream::new(rx));
 
-    let mut switch_timer_handle = None::<JoinHandle<()>>;
+    let mut switch_timer_handle = None::<JoinHandleTerminator<()>>;
+    if current_state {
+        start_switchoff_timer(auto_switch_off_time, &mut switch_timer_handle, &tx);
+    }
 
     while let Some(event) = input_stream.next().await {
         match event {
@@ -357,9 +385,9 @@ async fn dual_input_switch_task(
                 };
                 sender.send(current_state).await?;
                 if current_state {
-                    reset_auto_switchoff_timer(auto_switch_off_time, &tx, &mut switch_timer_handle);
+                    start_switchoff_timer(auto_switch_off_time, &mut switch_timer_handle, &tx);
                 } else {
-                    clear_timer(&mut switch_timer_handle);
+                    switch_timer_handle.take();
                 }
             }
             DimmerEvent::ButtonState(_) => {}
@@ -370,37 +398,13 @@ async fn dual_input_switch_task(
             }
             DimmerEvent::PresenceDetected => {
                 if current_state {
-                    reset_auto_switchoff_timer(auto_switch_off_time, &tx, &mut switch_timer_handle);
+                    start_switchoff_timer(auto_switch_off_time, &mut switch_timer_handle, &tx);
                 } else {
-                    clear_timer(&mut switch_timer_handle);
+                    switch_timer_handle.take();
                 }
             }
             DimmerEvent::SetBrightness(_) => {}
         }
     }
     Ok(())
-}
-
-fn reset_auto_switchoff_timer<T: Copy + Eq + Hash + Send + 'static>(
-    auto_switch_off_time: Duration,
-    tx: &Sender<DimmerEvent<T>>,
-    timer_handle: &mut Option<JoinHandle<()>>,
-) {
-    let tx = tx.clone();
-    if let Some(handle) = timer_handle.replace(tokio::spawn(async move {
-        loop {
-            sleep(auto_switch_off_time).await;
-            if let Err(error) = tx.send(DimmerEvent::AutoSwitchOff).await {
-                error!("Error sending dim events: {error}");
-                break;
-            }
-        }
-    })) {
-        handle.abort();
-    }
-}
-fn clear_timer(timer_handle: &mut Option<JoinHandle<()>>) {
-    if let Some(handle) = timer_handle.take() {
-        handle.abort();
-    }
 }
