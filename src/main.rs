@@ -6,6 +6,7 @@ use actix_web_prometheus::PrometheusMetricsBuilder;
 use env_logger::{Env, TimestampPrecision};
 use log::{error, info};
 use thiserror::Error;
+use tinkerforge_async::io16_bricklet::Io16Bricklet;
 use tinkerforge_async::{
     base58::Base58,
     dmx_bricklet::DmxBricklet,
@@ -22,6 +23,7 @@ use tokio::{net::ToSocketAddrs, pin, select, sync::mpsc, task, task::JoinHandle,
 use tokio_stream::StreamExt;
 
 use crate::data::settings::Tinkerforge;
+use crate::devices::io_handler::handle_io16;
 use crate::devices::screen_data_renderer::show_debug_text;
 use crate::terminator::{AbortHandleTerminator, DeviceThreadTerminator, JoinHandleTerminator};
 use crate::{
@@ -120,6 +122,23 @@ async fn run_enumeration_listener<T: ToSocketAddrs + Debug + Send + 'static + Cl
                                 info!("Found unused DMX Bricklet {uid} on {addr:?}");
                             }
                         }
+                        Io16Bricklet::DEVICE_IDENTIFIER => {
+                            if let Some(settings) = tinkerforge_devices.io_bricklets.get(&uid) {
+                                register_handle(
+                                    registered_devices,
+                                    uid,
+                                    handle_io16(
+                                        Io16Bricklet::new(uid.into(), ipcon.clone()),
+                                        event_registry.clone(),
+                                        &settings.entries,
+                                    )
+                                    .await,
+                                )
+                                .await;
+                            } else {
+                                info!("Found unused IO16 Device {uid} on {addr:?}");
+                            }
+                        }
                         Io16V2Bricklet::DEVICE_IDENTIFIER => {
                             if let Some(settings) = tinkerforge_devices.io_bricklets.get(&uid) {
                                 register_handle(
@@ -134,7 +153,7 @@ async fn run_enumeration_listener<T: ToSocketAddrs + Debug + Send + 'static + Cl
                                 )
                                 .await;
                             } else {
-                                info!("Found unused IO16 Device {uid} on {addr:?}");
+                                info!("Found unused IO16 v2 Device {uid} on {addr:?}");
                             }
                         }
                         MotionDetectorV2Bricklet::DEVICE_IDENTIFIER => {

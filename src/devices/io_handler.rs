@@ -1,20 +1,46 @@
 use core::option::Option;
+use std::pin::Pin;
+use std::task::{Context, Poll};
 
+use futures::Stream;
+use futures::StreamExt as OtherStreamExt;
 use log::{error, info};
 use thiserror::Error;
+use tinkerforge_async::io16_bricklet::{InterruptEvent, Io16Bricklet};
 use tinkerforge_async::{error::TinkerforgeError, io16_v2_bricklet::Io16V2Bricklet};
+use tokio::sync::mpsc::Receiver;
 use tokio::{sync::mpsc, task::JoinHandle, time::sleep};
-use tokio_stream::{wrappers::ReceiverStream, StreamExt};
+use tokio_stream::{empty, wrappers::ReceiverStream, StreamExt};
+use tokio_util::either::Either;
 
 use crate::data::registry::{ButtonState, DualButtonLayout, EventRegistry, SingleButtonLayout};
 use crate::data::wiring::ButtonSetting;
 
-pub async fn handle_io16_v2(
-    bricklet: Io16V2Bricklet,
+pub async fn handle_io16(
+    bricklet: Io16Bricklet,
     event_registry: EventRegistry,
     buttons: &[ButtonSetting],
 ) -> mpsc::Sender<()> {
     let (tx, rx) = mpsc::channel(1);
+    let channel_settings = collect_16_channel_settings(event_registry, buttons).await;
+    tokio::spawn(async move {
+        let result = io_16_v1_loop(bricklet, rx, channel_settings).await;
+        match result {
+            Err(error) => {
+                error!("Cannot communicate with Io16V2Bricklet: {error}");
+            }
+            Ok(_) => {
+                info!("Io16V2Bricklet done");
+            }
+        }
+    });
+    tx
+}
+
+async fn collect_16_channel_settings(
+    event_registry: EventRegistry,
+    buttons: &[ButtonSetting],
+) -> [ChannelSetting; 16] {
     let mut channel_settings = <[ChannelSetting; 16]>::default();
     for setting in buttons {
         match setting {
@@ -49,6 +75,87 @@ pub async fn handle_io16_v2(
             }
         }
     }
+    channel_settings
+}
+
+struct ByteMaskIterator {
+    value: u8,
+    mask: u8,
+    index: u8,
+}
+
+impl Stream for ByteMaskIterator {
+    type Item = IoMessage;
+
+    fn poll_next(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        Poll::Ready(Iterator::next(self.get_mut()))
+    }
+}
+
+impl Iterator for ByteMaskIterator {
+    type Item = IoMessage;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        while self.mask != 0 && self.mask & 1 == 0 {
+            self.index += 1;
+            self.mask >>= 1;
+            self.value >>= 1;
+        }
+        if self.mask == 0 {
+            None
+        } else {
+            let event = Some(if self.value & 1 == 1 {
+                IoMessage::Release(self.index)
+            } else {
+                IoMessage::Press(self.index)
+            });
+            self.index += 1;
+            self.mask >>= 1;
+            self.value >>= 1;
+            event
+        }
+    }
+}
+
+async fn io_16_v1_loop(
+    mut bricklet: Io16Bricklet,
+    rx: Receiver<()>,
+    channel_settings: [ChannelSetting; 16],
+) -> Result<(), IoHandlerError> {
+    bricklet.set_debounce_period(100).await?;
+    bricklet.set_port_interrupt('a', 0xff).await?;
+    bricklet.set_port_interrupt('b', 0xff).await?;
+    let button_event_stream = bricklet.get_interrupt_callback_receiver().await.flat_map(
+        move |InterruptEvent {
+                  port,
+                  interrupt_mask,
+                  value_mask,
+              }| {
+            if let Some(start_idx) = match port {
+                'a' => Some(0),
+                'b' => Some(8),
+                _ => None,
+            } {
+                Either::Left(ByteMaskIterator {
+                    value: value_mask,
+                    mask: interrupt_mask,
+                    index: start_idx,
+                })
+            } else {
+                Either::Right(empty())
+            }
+        },
+    );
+    io_16_loop(rx, channel_settings, button_event_stream).await
+}
+
+pub async fn handle_io16_v2(
+    bricklet: Io16V2Bricklet,
+    event_registry: EventRegistry,
+    buttons: &[ButtonSetting],
+) -> mpsc::Sender<()> {
+    let (tx, rx) = mpsc::channel(1);
+    let channel_settings = collect_16_channel_settings(event_registry, buttons).await;
     tokio::spawn(async move {
         match io_16_v2_loop(bricklet, rx, channel_settings).await {
             Err(error) => {
@@ -62,7 +169,7 @@ pub async fn handle_io16_v2(
     tx
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 enum IoMessage {
     Close,
     Press(u8),
@@ -83,23 +190,34 @@ async fn io_16_v2_loop(
     termination_receiver: mpsc::Receiver<()>,
     channel_settings: [ChannelSetting; 16],
 ) -> Result<(), IoHandlerError> {
-    let (rx, tx) = mpsc::channel(2);
-    let mut channel_timer: [Option<JoinHandle<()>>; 16] = <[Option<JoinHandle<()>>; 16]>::default();
-
-    let button_event_stream = bricklet
-        .get_input_value_callback_receiver()
-        .await
-        .map(|event| {
+    let button_event_stream = tokio_stream::StreamExt::map(
+        bricklet.get_input_value_callback_receiver().await,
+        |event| {
             if !event.value {
                 IoMessage::Press(event.channel)
             } else {
                 IoMessage::Release(event.channel)
             }
-        });
+        },
+    );
+
+    io_16_loop(termination_receiver, channel_settings, button_event_stream).await
+}
+
+async fn io_16_loop(
+    termination_receiver: Receiver<()>,
+    channel_settings: [ChannelSetting; 16],
+    button_event_stream: impl Stream<Item = IoMessage> + Sized + Unpin,
+) -> Result<(), IoHandlerError> {
+    let (rx, tx) = mpsc::channel(2);
+    let mut channel_timer: [Option<JoinHandle<()>>; 16] = <[Option<JoinHandle<()>>; 16]>::default();
     let mut receiver = button_event_stream
-        .merge(ReceiverStream::new(termination_receiver).map(|_| IoMessage::Close))
+        .merge(tokio_stream::StreamExt::map(
+            ReceiverStream::new(termination_receiver),
+            |_| IoMessage::Close,
+        ))
         .merge(ReceiverStream::new(tx));
-    while let Some(message) = receiver.next().await {
+    while let Some(message) = tokio_stream::StreamExt::next(&mut receiver).await {
         match message {
             IoMessage::Close => break,
             IoMessage::Press(channel) => {
@@ -212,4 +330,38 @@ pub enum IoHandlerError {
     DualButtonRelease(mpsc::error::SendError<ButtonState<DualButtonLayout>>),
     #[error("Cannot send Single button Release: {0}")]
     SingleButtonRelease(mpsc::error::SendError<ButtonState<SingleButtonLayout>>),
+}
+
+#[cfg(test)]
+mod test {
+    use crate::devices::io_handler::{ByteMaskIterator, IoMessage};
+
+    #[test]
+    fn test_byte_mask() {
+        assert_eq!(
+            vec![IoMessage::Press(0)],
+            Iterator::collect::<Vec<_>>(ByteMaskIterator {
+                value: 0b00000001,
+                mask: 0b00000001,
+                index: 0,
+            })
+        );
+        assert_eq!(
+            vec![
+                IoMessage::Release(8),
+                IoMessage::Press(9),
+                IoMessage::Release(10),
+                IoMessage::Press(11),
+                IoMessage::Release(12),
+                IoMessage::Press(13),
+                IoMessage::Release(14),
+                IoMessage::Press(15),
+            ],
+            Iterator::collect::<Vec<_>>(ByteMaskIterator {
+                value: 0b10101010,
+                mask: 0b11111111,
+                index: 8,
+            })
+        );
+    }
 }

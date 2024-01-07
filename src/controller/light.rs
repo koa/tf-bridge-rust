@@ -171,7 +171,6 @@ async fn motion_detector_dimmer_task(
     let (tx, rx) = mpsc::channel(2);
 
     let mut timer_handle = None::<JoinHandleTerminator<()>>;
-    output_sender.send(Saturating(0)).await?;
     let mut on_brightness = Saturating(255);
     let mut light_enabled = false;
     if let Some(br) = current_brightness {

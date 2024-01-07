@@ -153,7 +153,7 @@ pub struct TemperatureSettings {
 
 #[cfg(test)]
 mod test {
-    use std::collections::{BTreeMap, HashMap};
+    use std::collections::BTreeMap;
     use std::net::{IpAddr, Ipv4Addr};
     use std::time::Duration;
 
