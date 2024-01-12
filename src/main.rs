@@ -1,5 +1,7 @@
-use std::future::Future;
-use std::{collections::HashMap, error::Error, fmt::Debug, fs::File, sync::Arc, time::Duration};
+use std::{
+    collections::HashMap, error::Error, fmt::Debug, fs::File, future::Future, sync::Arc,
+    time::Duration,
+};
 
 use actix_web::{get, App, HttpServer};
 use actix_web_prometheus::PrometheusMetricsBuilder;
@@ -18,20 +20,24 @@ use tinkerforge_async::{
     motion_detector_v2_bricklet::MotionDetectorV2Bricklet,
     temperature_v2_bricklet::TemperatureV2Bricklet,
 };
-use tokio::signal::unix::{signal, SignalKind};
-use tokio::{net::ToSocketAddrs, pin, select, sync::mpsc, task, task::JoinHandle, time::sleep};
+use tokio::{
+    net::ToSocketAddrs,
+    pin, select,
+    signal::unix::{signal, SignalKind},
+    sync::mpsc,
+    task,
+    task::JoinHandle,
+    time::sleep,
+};
 use tokio_stream::StreamExt;
 
-use crate::data::settings::Tinkerforge;
-use crate::devices::io_handler::handle_io16;
-use crate::devices::screen_data_renderer::show_debug_text;
-use crate::terminator::{AbortHandleTerminator, DeviceThreadTerminator, JoinHandleTerminator};
 use crate::{
     controller::{
         action::ring_controller,
         heat::heat_controller,
         light::{dual_input_dimmer, dual_input_switch, motion_detector, motion_detector_dimmer},
     },
+    data::settings::Tinkerforge,
     data::{
         google_data::read_sheet_data,
         registry::EventRegistry,
@@ -40,17 +46,21 @@ use crate::{
         Uid,
     },
     devices::{
-        dmx_handler::handle_dmx, io_handler::handle_io16_v2,
+        dmx_handler::handle_dmx, io_handler::handle_io16, io_handler::handle_io16_v2,
         motion_detector::handle_motion_detector, relay::handle_quad_relay,
-        screen_data_renderer::start_screen_thread, temperature::handle_temperature,
+        screen_data_renderer::show_debug_text, screen_data_renderer::start_screen_thread,
+        temperature::handle_temperature,
     },
     snapshot::{read_snapshot, write_snapshot},
+    terminator::{AbortHandleTerminator, DeviceThreadTerminator, JoinHandleTerminator},
 };
 
 mod controller;
 mod data;
 mod devices;
 mod icons;
+mod snapshot;
+mod terminator;
 mod util;
 
 #[get("/health")]
@@ -237,8 +247,6 @@ async fn register_handle(
     running_threads.insert(uid, DeviceThreadTerminator::new(abort_handle));
 }
 
-mod terminator;
-
 fn start_enumeration_listener<T: ToSocketAddrs + Clone + Debug + Send + Sync + 'static>(
     connection: T,
     event_registry: EventRegistry,
@@ -301,31 +309,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let event_registry = EventRegistry::new(initial_snapshot);
 
     let snapshot_storage_thread = start_snapshot_thread(&event_registry, state_file);
-    //let (tx, mut rx) = mpsc::channel(1);
-    //let mgmt_tx = tx.clone();
-    /* tokio::spawn(async move {
-        match mgmt_server.await {
-            Ok(_) => {
-                info!("Management server terminated normally");
-            }
-            Err(error) => {
-                error!("Management Server terminated with error: {error}");
-            }
-        }
-        report_send_error(mgmt_tx.send(()).await);
-    });*/
-
-    //let cfg_tx = tx.clone();
-    /*
-    let config_updater = tokio::spawn(async move {
-        match config_update_loop(tinkerforge, setup_file, event_registry).await {
-            Ok(_) => {}
-            Err(error) => {
-                error!("Config load failed: {error}")
-            }
-        };
-        report_send_error(cfg_tx.send(()).await);
-    });*/
     let mut terminate_signal = signal(SignalKind::terminate())?;
     let config_update_future = config_update_loop(tinkerforge, setup_file, event_registry);
     select! {
@@ -534,5 +517,3 @@ fn start_snapshot_thread(
         }
     }
 }
-
-mod snapshot;

@@ -9,12 +9,14 @@ use tokio::{
 };
 use tokio_stream::{wrappers::ReceiverStream, Stream, StreamExt};
 
-use crate::data::registry::{
-    BrightnessKey, ButtonState, DualButtonKey, DualButtonLayout, EventRegistry, SingleButtonKey,
-    SingleButtonLayout, SwitchOutputKey,
+use crate::{
+    data::registry::{
+        BrightnessKey, ButtonState, DualButtonKey, DualButtonLayout, EventRegistry,
+        SingleButtonKey, SingleButtonLayout, SwitchOutputKey,
+    },
+    terminator::JoinHandleTerminator,
+    util::optional_stream,
 };
-use crate::terminator::JoinHandleTerminator;
-use crate::util::optional_stream;
 
 pub async fn dual_input_dimmer(
     event_registry: &EventRegistry,

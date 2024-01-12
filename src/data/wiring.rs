@@ -1,15 +1,15 @@
-use std::collections::BTreeMap;
-use std::net::IpAddr;
-use std::time::Duration;
+use std::{collections::BTreeMap, net::IpAddr, time::Duration};
 
 use serde::{Deserialize, Serialize};
 use strum_macros::EnumIter;
 
-use crate::data::registry::{
-    BrightnessKey, ClockKey, DualButtonKey, LightColorKey, SingleButtonKey, SwitchOutputKey,
-    TemperatureKey,
+use crate::data::{
+    registry::{
+        BrightnessKey, ClockKey, DualButtonKey, LightColorKey, SingleButtonKey, SwitchOutputKey,
+        TemperatureKey,
+    },
+    Uid,
 };
-use crate::data::Uid;
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
 pub struct Wiring {
@@ -153,16 +153,23 @@ pub struct TemperatureSettings {
 
 #[cfg(test)]
 mod test {
-    use std::collections::BTreeMap;
-    use std::net::{IpAddr, Ipv4Addr};
-    use std::time::Duration;
-
-    use crate::data::registry::{BrightnessKey, DualButtonKey, LightColorKey};
-    use crate::data::wiring::{
-        Controllers, DmxConfigEntry, DmxSettings, DualInputDimmer, TinkerforgeDevices, Wiring,
+    use std::{
+        collections::BTreeMap,
+        net::{IpAddr, Ipv4Addr},
+        time::Duration,
     };
-    use crate::data::DeviceInRoom;
-    use crate::util::kelvin_2_mireds;
+
+    use crate::{
+        data::{
+            registry::{BrightnessKey, DualButtonKey, LightColorKey},
+            wiring::{
+                Controllers, DmxConfigEntry, DmxSettings, DualInputDimmer, TinkerforgeDevices,
+                Wiring,
+            },
+            DeviceInRoom,
+        },
+        util::kelvin_2_mireds,
+    };
 
     #[test]
     fn test_serialize_tinkerforge() {
