@@ -1,9 +1,15 @@
-use crate::data::registry::{EventRegistry, TemperatureKey};
 use log::error;
 use thiserror::Error;
-use tinkerforge_async::{error::TinkerforgeError, temperature_v2_bricklet::TemperatureV2Bricklet};
+use tinkerforge_async::{
+    error::TinkerforgeError,
+    temperature_v2_bricklet::{
+        TemperatureV2Bricklet, TEMPERATURE_V2_BRICKLET_STATUS_LED_CONFIG_OFF,
+    },
+};
 use tokio::sync::mpsc;
 use tokio_stream::{wrappers::ReceiverStream, StreamExt};
+
+use crate::data::registry::{EventRegistry, TemperatureKey};
 
 pub fn handle_temperature(
     bricklet: TemperatureV2Bricklet,
@@ -42,6 +48,9 @@ async fn temperature_task(
         .map(|t| TemperatureEvent::Temperature(t as f32 / 100.0))
         .merge(ReceiverStream::new(termination_receiver).map(|_| TemperatureEvent::Closed));
     let sender = event_registry.temperature_sender(temperature_key).await;
+    bricklet
+        .set_status_led_config(TEMPERATURE_V2_BRICKLET_STATUS_LED_CONFIG_OFF)
+        .await?;
     sender
         .send(bricklet.get_temperature().await? as f32 / 100.0)
         .await?;

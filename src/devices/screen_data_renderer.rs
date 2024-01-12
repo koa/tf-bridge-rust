@@ -23,6 +23,7 @@ use simple_layout::prelude::{
     vertical_layout, DashedLine, Layoutable, RoundedLine,
 };
 use thiserror::Error;
+use tinkerforge_async::lcd_128x64_bricklet::LCD_128X64_BRICKLET_STATUS_LED_CONFIG_OFF;
 use tinkerforge_async::{
     error::TinkerforgeError, lcd_128x64_bricklet::Lcd128x64Bricklet,
     lcd_128x64_bricklet::TouchPositionEvent,
@@ -415,7 +416,7 @@ pub async fn show_debug_text(
 }
 
 async fn screen_thread_loop(
-    bricklet: Lcd128x64Bricklet,
+    mut bricklet: Lcd128x64Bricklet,
     event_registry: EventRegistry,
     termination_receiver: Receiver<()>,
     settings: ScreenSettings,
@@ -428,6 +429,9 @@ async fn screen_thread_loop(
         light_color_key,
         brightness_key,
     } = settings;
+    bricklet
+        .set_status_led_config(LCD_128X64_BRICKLET_STATUS_LED_CONFIG_OFF)
+        .await?;
     let mut display = Lcd128x64BrickletDisplay::new(bricklet, orientation).await?;
     display.set_backlight(0).await?;
     let (tx, rx) = mpsc::channel(2);
