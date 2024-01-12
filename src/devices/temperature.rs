@@ -4,6 +4,7 @@ use tinkerforge_async::{
     error::TinkerforgeError,
     temperature_v2_bricklet::{
         TemperatureV2Bricklet, TEMPERATURE_V2_BRICKLET_STATUS_LED_CONFIG_OFF,
+        TEMPERATURE_V2_BRICKLET_THRESHOLD_OPTION_OFF,
     },
 };
 use tokio::sync::mpsc;
@@ -42,15 +43,25 @@ async fn temperature_task(
     temperature_key: TemperatureKey,
     termination_receiver: mpsc::Receiver<()>,
 ) -> Result<(), TemperatureError> {
+    bricklet
+        .set_status_led_config(TEMPERATURE_V2_BRICKLET_STATUS_LED_CONFIG_OFF)
+        .await?;
+    bricklet
+        .set_temperature_callback_configuration(
+            500,
+            true,
+            TEMPERATURE_V2_BRICKLET_THRESHOLD_OPTION_OFF,
+            20,
+            20,
+        )
+        .await?;
+
     let mut stream = bricklet
         .get_temperature_callback_receiver()
         .await
         .map(|t| TemperatureEvent::Temperature(t as f32 / 100.0))
         .merge(ReceiverStream::new(termination_receiver).map(|_| TemperatureEvent::Closed));
     let sender = event_registry.temperature_sender(temperature_key).await;
-    bricklet
-        .set_status_led_config(TEMPERATURE_V2_BRICKLET_STATUS_LED_CONFIG_OFF)
-        .await?;
     sender
         .send(bricklet.get_temperature().await? as f32 / 100.0)
         .await?;
