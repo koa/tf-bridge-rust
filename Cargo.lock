@@ -2242,13 +2242,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d66dc143e6b11c1eddc06d5c423cfc97062865baf299914ab64caa38182078fe"
 
 [[package]]
-name = "simple_layout"
-version = "0.0.1"
-source = "git+https://github.com/koa/simple-layout#a640ce6ef5120781f248fdd83e632619ce24e3fb"
+name = "simple-layout"
+version = "0.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c077c2f579cb42296cdc10ac62618928703cddf06a93fd5d321a77ae32006761"
 dependencies = [
  "embedded-graphics",
- "env_logger",
- "log",
 ]
 
 [[package]]
@@ -2374,7 +2373,7 @@ dependencies = [
  "ron 0.8.1",
  "serde",
  "serde_yaml",
- "simple_layout",
+ "simple-layout",
  "strum",
  "strum_macros",
  "sub-array",
