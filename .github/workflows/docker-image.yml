@@ -53,4 +53,4 @@ jobs:
         tags: ${{ steps.meta.outputs.tags }}
         labels: ${{ steps.meta.outputs.labels }}
         file: Dockerfile.arm
-        platforms: linux/arm64
+        platforms: linux/arm/v7
