@@ -326,7 +326,6 @@ async fn parse_endpoints(
                             DateTime::<Local>::from(data.last_change)
                         )
                     }) {
-                        info!("New State: {new_state:?}");
                         if current_state != Some(&new_state) {
                             let row = row_idx + start_row;
                             let col = state_column + start_column;
