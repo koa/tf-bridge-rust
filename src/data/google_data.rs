@@ -218,6 +218,7 @@ pub async fn read_sheet_data(state: Option<&State>) -> Result<Option<Wiring>, Go
             config,
             &spreadsheet_methods,
             &sheet,
+            state,
             &mut dmx_bricklets,
             &mut dual_input_dimmers,
             &mut dual_input_switches,
@@ -442,13 +443,10 @@ async fn parse_relays<'a>(
                     }
                 }
             }
-            let ring_rows = adjust_device_idx(
-                config,
-                spreadsheet_methods,
-                device_ids_of_rooms,
-                relay_configs.sheet(),
-            )
-            .await?;
+            let mut updates = Vec::new();
+            let ring_rows =
+                adjust_device_idx(device_ids_of_rooms, relay_configs.sheet(), &mut updates).await?;
+            write_updates_to_sheet(config, spreadsheet_methods, updates).await?;
             for row in ring_rows {
                 let index = SwitchOutputKey::Bell(DeviceInRoom {
                     room: row.room,
@@ -587,13 +585,12 @@ async fn parse_controllers<'a>(
                     ));
                 }
             }
-            let controller_rows = adjust_device_idx(
-                config,
-                spreadsheet_methods,
-                device_ids_of_rooms,
-                controllers.sheet(),
-            )
-            .await?;
+            let mut updates = Vec::new();
+
+            let controller_rows =
+                adjust_device_idx(device_ids_of_rooms, controllers.sheet(), &mut updates).await?;
+            write_updates_to_sheet(config, spreadsheet_methods, updates).await?;
+
             for row in controller_rows {
                 let device_idx = DeviceInRoom {
                     room: row.room,
@@ -716,13 +713,12 @@ async fn parse_motion_detectors<'a>(
                     ));
                 }
             }
-            let motion_detector_rows = adjust_device_idx(
-                config,
-                spreadsheet_methods,
-                device_ids_of_rooms,
-                md_config.sheet(),
-            )
-            .await?;
+            let mut updates = Vec::new();
+
+            let motion_detector_rows =
+                adjust_device_idx(device_ids_of_rooms, md_config.sheet(), &mut updates).await?;
+            write_updates_to_sheet(config, spreadsheet_methods, updates).await?;
+
             for row in motion_detector_rows {
                 let key = SingleButtonKey::MotionDetector(DeviceInRoom {
                     room: row.room,
@@ -739,6 +735,7 @@ async fn parse_lights<'a>(
     config: &GoogleSheet,
     spreadsheet_methods: &SpreadsheetMethods<'_, HttpsConnector<HttpConnector>>,
     sheet: &'a Spreadsheet,
+    state: Option<&State>,
     dmx_bricklets: &mut BTreeMap<Uid, Vec<DmxConfigEntry>>,
     dual_input_dimmers: &mut Vec<DualInputDimmer>,
     dual_input_switches: &mut Vec<DualInputSwitch>,
@@ -818,7 +815,7 @@ async fn parse_lights<'a>(
 
         let (start_row, start_column, mut rows) = get_grid_and_coordinates(light_grid);
         if let Some((_, header)) = rows.next() {
-            let [room_column, /*light_id_column,*/ light_idx_column, template_column, device_address_column, bus_start_address_column, touchscreen_whitebalance_column, touchscreen_brightness_column] =
+            let [room_column, /*light_id_column,*/ light_idx_column, template_column, device_address_column, bus_start_address_column, touchscreen_whitebalance_column, touchscreen_brightness_column, state_column] =
                 parse_headers(
                     header,
                     [
@@ -830,6 +827,7 @@ async fn parse_lights<'a>(
                         light_config.bus_start_address(),
                         light_config.touchscreen_whitebalance(),
                         light_config.touchscreen_brightness(),
+                        light_config.state()
                     ],
                 )
                 .map_err(GoogleDataError::LightHeader)?;
@@ -852,6 +850,8 @@ async fn parse_lights<'a>(
             )
             .map_err(GoogleDataError::LightHeader)?;
             let mut device_ids_of_rooms = HashMap::<_, Vec<_>>::new();
+            let mut updates = Vec::new();
+
             for (row_idx, row) in rows {
                 if let (
                     Some(room),
@@ -864,6 +864,7 @@ async fn parse_lights<'a>(
                     presence_detectors,
                     touchscreen_whitebalance,
                     touchscreen_brightness,
+                    old_state,
                 ) = (
                     get_cell_content(row, room_column)
                         .map(Room::from_str)
@@ -889,6 +890,7 @@ async fn parse_lights<'a>(
                         .into_boxed_slice(),
                     get_cell_content(row, touchscreen_whitebalance_column),
                     get_cell_content(row, touchscreen_brightness_column),
+                    get_cell_content(row, state_column),
                 ) {
                     let row = row_idx + start_row;
                     let col = light_idx_column + start_column;
@@ -908,14 +910,25 @@ async fn parse_lights<'a>(
                             touchscreen_brightness,
                         },
                     ));
+                    update_state(
+                        &mut updates,
+                        light_config.sheet(),
+                        CellCoordinates {
+                            row: row_idx + start_row,
+                            col: state_column + start_column,
+                        },
+                        device_address,
+                        state,
+                        old_state,
+                    );
                     //info!("Room: {room:?}, idx: {coordinates}");
                 }
             }
             let sheet_name = light_config.sheet();
-
             let light_device_rows =
-                adjust_device_idx(config, spreadsheet_methods, device_ids_of_rooms, sheet_name)
-                    .await?;
+                adjust_device_idx(device_ids_of_rooms, sheet_name, &mut updates).await?;
+            write_updates_to_sheet(config, spreadsheet_methods, updates).await?;
+
             for light_row in light_device_rows {
                 let dmx_bricklet_settings =
                     dmx_bricklets.entry(light_row.device_address).or_default();
@@ -1059,12 +1072,10 @@ trait DeviceIdxAccess {
     fn update_id(&mut self, id: u16);
 }
 async fn adjust_device_idx<R: DeviceIdxAccess>(
-    config: &GoogleSheet,
-    spreadsheet_methods: &SpreadsheetMethods<'_, HttpsConnector<HttpConnector>>,
     device_ids_of_rooms: HashMap<Room, Vec<(CellCoordinates, R)>>,
     sheet_name: &str,
+    updates: &mut Vec<ValueRange>,
 ) -> Result<Vec<R>, GoogleDataError> {
-    let mut updates = Vec::new();
     let mut device_rows = Vec::new();
     for devices in device_ids_of_rooms.into_values() {
         let mut occupied_ids = HashSet::new();
@@ -1100,7 +1111,6 @@ async fn adjust_device_idx<R: DeviceIdxAccess>(
             next_id += 1;
         }
     }
-    write_updates_to_sheet(config, spreadsheet_methods, updates).await?;
     Ok(device_rows)
 }
 

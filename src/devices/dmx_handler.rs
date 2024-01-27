@@ -1,22 +1,30 @@
+use std::net::IpAddr;
 use std::num::Saturating;
 
 use futures::stream::SelectAll;
 use log::{error, info};
 use sub_array::SubArray;
+use thiserror::Error;
+use tinkerforge_async::base58::Base58Error;
 use tinkerforge_async::{
     dmx_bricklet::{DmxBricklet, DMX_BRICKLET_DMX_MODE_MASTER},
     error::TinkerforgeError,
 };
+use tokio::sync::mpsc;
 use tokio_stream::{Stream, StreamExt};
 use tokio_util::either::Either;
 
-use crate::data::{registry::EventRegistry, wiring::DmxConfigEntry};
+use crate::data::state::StateUpdateMessage;
+use crate::data::{registry::EventRegistry, wiring::DmxConfigEntry, Uid};
 use crate::terminator::TestamentSender;
 
 pub async fn handle_dmx(
     bricklet: DmxBricklet,
     event_registry: EventRegistry,
     config: &[DmxConfigEntry],
+    uid: Uid,
+    status_updater: mpsc::Sender<StateUpdateMessage>,
+    ip_addr: IpAddr,
 ) -> TestamentSender {
     let (tx, rx) = TestamentSender::create();
     let mut streams = SelectAll::new();
@@ -86,7 +94,7 @@ pub async fn handle_dmx(
     let events = streams.merge(rx.send_on_terminate(DmxCommand::Exit));
 
     tokio::spawn(async move {
-        match dmx_loop(bricklet, events).await {
+        match dmx_loop(bricklet, events, status_updater.clone(), ip_addr).await {
             Err(error) => {
                 error!("Cannot communicate with DmxBricklet: {error}");
             }
@@ -94,6 +102,13 @@ pub async fn handle_dmx(
                 info!("DmxBricklet done");
             }
         }
+        status_updater
+            .send(StateUpdateMessage::BrickletDisconnected {
+                uid,
+                endpoint: ip_addr,
+            })
+            .await
+            .expect("Error on send disconnect message");
     });
     tx
 }
@@ -137,13 +152,27 @@ enum DimmColorUpdate {
 }
 
 const DMX_PAKET_SIZE: u16 = 60;
+#[derive(Debug, Error)]
+enum DmxError {
+    #[error("Tinkerforge Error: {0}")]
+    Tinkerforge(#[from] TinkerforgeError),
+    #[error("Cannot parse uid {0}")]
+    Uid(#[from] Base58Error),
+    #[error("Cannot send state update {0}")]
+    Send(#[from] mpsc::error::SendError<StateUpdateMessage>),
+}
 
 async fn dmx_loop<St: Stream<Item = DmxCommand> + Unpin>(
     mut bricklet: DmxBricklet,
     mut stream: St,
-) -> Result<(), TinkerforgeError> {
+    status_updater: mpsc::Sender<StateUpdateMessage>,
+    ip_addr: IpAddr,
+) -> Result<(), DmxError> {
+    let id = bricklet.get_identity().await?;
+    status_updater.send((ip_addr, id).try_into()?).await?;
     bricklet.set_dmx_mode(DMX_BRICKLET_DMX_MODE_MASTER).await?;
     let mut channel_values = [0u8; 480];
+
     while let Some(event) = stream.next().await {
         //let start_time = SystemTime::now();
         match event {

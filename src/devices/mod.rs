@@ -172,6 +172,9 @@ async fn run_enumeration_listener(
                                                 DmxBricklet::new(uid.into(), ipcon.clone()),
                                                 event_registry.clone(),
                                                 &settings.entries,
+                                                uid,
+                                                status_updater.clone(),
+                                                addr.0,
                                             )
                                             .await,
                                         )
