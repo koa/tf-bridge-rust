@@ -7,18 +7,18 @@ use tinkerforge_async::{
     dmx_bricklet::{DmxBricklet, DMX_BRICKLET_DMX_MODE_MASTER},
     error::TinkerforgeError,
 };
-use tokio::sync::{mpsc, mpsc::Sender};
-use tokio_stream::{wrappers::ReceiverStream, Stream, StreamExt};
+use tokio_stream::{Stream, StreamExt};
 use tokio_util::either::Either;
 
 use crate::data::{registry::EventRegistry, wiring::DmxConfigEntry};
+use crate::terminator::TestamentSender;
 
 pub async fn handle_dmx(
     bricklet: DmxBricklet,
     event_registry: EventRegistry,
     config: &[DmxConfigEntry],
-) -> Sender<()> {
-    let (tx, rx) = mpsc::channel(1);
+) -> TestamentSender {
+    let (tx, rx) = TestamentSender::create();
     let mut streams = SelectAll::new();
     for config_entry in config.iter().cloned() {
         streams.push(match config_entry {
@@ -83,7 +83,7 @@ pub async fn handle_dmx(
             }
         });
     }
-    let events = streams.merge(ReceiverStream::new(rx).map(|_| DmxCommand::Exit));
+    let events = streams.merge(rx.send_on_terminate(DmxCommand::Exit));
 
     tokio::spawn(async move {
         match dmx_loop(bricklet, events).await {

@@ -9,6 +9,7 @@ use std::{
     time::Duration,
 };
 
+use chrono::{DateTime, Local};
 use google_sheets4::{
     api::{
         BatchUpdateValuesRequest, CellData, GridData, Spreadsheet, SpreadsheetMethods, ValueRange,
@@ -18,11 +19,12 @@ use google_sheets4::{
     oauth2::{authenticator::Authenticator, ServiceAccountAuthenticator},
     Sheets,
 };
-use log::error;
+use log::{error, info};
 use serde::Deserialize;
 use serde_yaml::Value;
 use thiserror::Error;
 
+use crate::data::state::{BrickletConnectionData, BrickletMetadata, State};
 use crate::{
     data::{
         registry::{
@@ -83,7 +85,7 @@ struct ButtonTemplateTypes<'a> {
     style: ButtonStyle,
     sub_devices: Box<[&'a str]>,
 }
-pub async fn read_sheet_data() -> Result<Option<Wiring>, GoogleDataError> {
+pub async fn read_sheet_data(state: Option<&State>) -> Result<Option<Wiring>, GoogleDataError> {
     let x = if let Some(config) = &CONFIG.google_sheet {
         let secret = config.read_secret().await?;
         let auth: Authenticator<HttpsConnector<HttpConnector>> =
@@ -179,13 +181,14 @@ pub async fn read_sheet_data() -> Result<Option<Wiring>, GoogleDataError> {
         let mut touchscreen_brightness_addresses = HashMap::new();
         let mut motion_detector_adresses = HashMap::new();
 
-        parse_endpoints(config, &sheet, &mut endpoints).await?;
+        parse_endpoints(config, &spreadsheet_methods, &sheet, state, &mut endpoints).await?;
         parse_buttons(
             config,
             button_template_config,
             button_config,
             &spreadsheet_methods,
             &sheet,
+            state,
             &mut io_bricklets,
             &mut single_button_adresses,
             &mut dual_button_adresses,
@@ -289,23 +292,55 @@ pub async fn read_sheet_data() -> Result<Option<Wiring>, GoogleDataError> {
 
 async fn parse_endpoints(
     config: &GoogleSheet,
+    spreadsheet_methods: &SpreadsheetMethods<'_, HttpsConnector<HttpConnector>>,
     sheet: &Spreadsheet,
+    state: Option<&State>,
     endpoints: &mut Vec<IpAddr>,
 ) -> Result<(), GoogleDataError> {
     let endpoints_config = config.endpoints();
     if let Some(endpoint_grid) = find_sheet_by_name(sheet, endpoints_config.sheet()) {
-        let (_, _, mut rows) = get_grid_and_coordinates(endpoint_grid);
+        let (start_row, start_column, mut rows) = get_grid_and_coordinates(endpoint_grid);
         if let Some((_, header)) = rows.next() {
-            let [address_column] = parse_headers(header, [endpoints_config.address()])
-                .map_err(GoogleDataError::EndpointsHeader)?;
-            while let Some((_, row)) = rows.next() {
-                if let Some(address) = get_cell_content(row, address_column)
-                    .map(IpAddr::from_str)
-                    .and_then(Result::ok)
-                {
+            let [address_column, state_column] = parse_headers(
+                header,
+                [endpoints_config.address(), endpoints_config.state()],
+            )
+            .map_err(GoogleDataError::EndpointsHeader)?;
+            let mut updates = Vec::new();
+            while let Some((row_idx, row)) = rows.next() {
+                if let (Some(address), current_state) = (
+                    get_cell_content(row, address_column)
+                        .map(IpAddr::from_str)
+                        .and_then(Result::ok),
+                    get_cell_content(row, state_column),
+                ) {
                     endpoints.push(address);
+                    if let Some(new_state) = state.and_then(|s| s.endpoint(&address)).map(|data| {
+                        format!(
+                            "{} at {}",
+                            data.state,
+                            DateTime::<Local>::from(data.last_change)
+                        )
+                    }) {
+                        info!("New State: {new_state:?}");
+                        if current_state != Some(&new_state) {
+                            let row = row_idx + start_row;
+                            let col = state_column + start_column;
+                            let coordinates = CellCoordinates { row, col };
+                            updates.push(ValueRange {
+                                major_dimension: None,
+                                range: Some(format!(
+                                    "{}!{}",
+                                    endpoints_config.sheet(),
+                                    coordinates
+                                )),
+                                values: Some(vec![vec![new_state.into()]]),
+                            })
+                        }
+                    }
                 }
             }
+            write_updates_to_sheet(config, spreadsheet_methods, updates).await?;
         }
     }
     Ok(())
@@ -1065,19 +1100,7 @@ async fn adjust_device_idx<R: DeviceIdxAccess>(
             next_id += 1;
         }
     }
-    if !updates.is_empty() {
-        let update = BatchUpdateValuesRequest {
-            data: Some(updates),
-            include_values_in_response: None,
-            response_date_time_render_option: None,
-            response_value_render_option: None,
-            value_input_option: Some("RAW".to_string()),
-        };
-        spreadsheet_methods
-            .values_batch_update(update, config.spreadsheet_id())
-            .doit()
-            .await?;
-    }
+    write_updates_to_sheet(config, spreadsheet_methods, updates).await?;
     Ok(device_rows)
 }
 
@@ -1087,6 +1110,7 @@ async fn parse_buttons<'a>(
     button_config: &GoogleButtonData,
     spreadsheet_methods: &SpreadsheetMethods<'_, HttpsConnector<HttpConnector>>,
     sheet: &'a Spreadsheet,
+    state: Option<&State>,
     io_bricklets: &mut BTreeMap<Uid, Vec<ButtonSetting>>,
     single_button_adresses: &mut HashMap<Cow<'a, str>, SingleButtonKey>,
     dual_button_adresses: &mut HashMap<Cow<'a, str>, DualButtonKey>,
@@ -1140,7 +1164,7 @@ async fn parse_buttons<'a>(
         }
         let (start_row, start_column, mut rows) = get_grid_and_coordinates(button_grid);
         if let Some((_, header)) = rows.next() {
-            let [room_column, button_id_column, button_idx_column, type_column, device_address_column, first_input_idx_column] =
+            let [room_column, button_id_column, button_idx_column, type_column, device_address_column, first_input_idx_column, state_column] =
                 parse_headers(
                     header,
                     [
@@ -1150,10 +1174,12 @@ async fn parse_buttons<'a>(
                         button_config.button_type(),
                         button_config.device_address(),
                         button_config.first_input_idx(),
+                        button_config.state(),
                     ],
                 )
                 .map_err(GoogleDataError::ButtonHeader)?;
             let mut button_ids_of_rooms = HashMap::<_, Vec<_>>::new();
+            let mut updates = Vec::new();
             for (row_idx, row) in rows {
                 if let (
                     Some(room),
@@ -1162,6 +1188,7 @@ async fn parse_buttons<'a>(
                     Some(button_template),
                     Some(device_address),
                     Some(first_input_idx),
+                    state_data,
                 ) = (
                     get_cell_content(row, room_column)
                         .map(Room::from_str)
@@ -1173,10 +1200,22 @@ async fn parse_buttons<'a>(
                         .map(Uid::from_str)
                         .and_then(Result::ok),
                     get_cell_integer(row, first_input_idx_column).map(|id| id as u8),
+                    get_cell_content(row, state_column),
                 ) {
                     let row = row_idx + start_row;
                     let col = button_idx_column + start_column;
                     let coordinates = CellCoordinates { row, col };
+                    update_state(
+                        &mut updates,
+                        button_config.sheet(),
+                        CellCoordinates {
+                            row,
+                            col: start_column + state_column,
+                        },
+                        device_address,
+                        state,
+                        state_data,
+                    );
                     button_ids_of_rooms.entry(room).or_default().push((
                         coordinates,
                         ButtonRowContent {
@@ -1190,7 +1229,6 @@ async fn parse_buttons<'a>(
                     ));
                 }
             }
-            let mut updates = Vec::new();
             let mut button_device_rows = Vec::new();
             for devices in button_ids_of_rooms.into_values() {
                 let mut occupied_ids = HashSet::new();
@@ -1226,19 +1264,7 @@ async fn parse_buttons<'a>(
                     next_id += 1;
                 }
             }
-            if !updates.is_empty() {
-                let update = BatchUpdateValuesRequest {
-                    data: Some(updates),
-                    include_values_in_response: None,
-                    response_date_time_render_option: None,
-                    response_value_render_option: None,
-                    value_input_option: Some("RAW".to_string()),
-                };
-                spreadsheet_methods
-                    .values_batch_update(update, config.spreadsheet_id())
-                    .doit()
-                    .await?;
-            }
+            write_updates_to_sheet(config, spreadsheet_methods, updates).await?;
             for button_row in button_device_rows {
                 let io_bricklet_settings =
                     io_bricklets.entry(button_row.device_address).or_default();
@@ -1280,6 +1306,68 @@ async fn parse_buttons<'a>(
         }
     }
     Ok(())
+}
+
+async fn write_updates_to_sheet(
+    config: &GoogleSheet,
+    spreadsheet_methods: &SpreadsheetMethods<'_, HttpsConnector<HttpConnector>>,
+    updates: Vec<ValueRange>,
+) -> Result<(), GoogleDataError> {
+    if !updates.is_empty() {
+        let update = BatchUpdateValuesRequest {
+            data: Some(updates),
+            include_values_in_response: None,
+            response_date_time_render_option: None,
+            response_value_render_option: None,
+            value_input_option: Some("RAW".to_string()),
+        };
+        spreadsheet_methods
+            .values_batch_update(update, config.spreadsheet_id())
+            .doit()
+            .await?;
+    }
+    Ok(())
+}
+
+fn update_state(
+    updates: &mut Vec<ValueRange>,
+    sheet_name: &str,
+    cell_coordinates: CellCoordinates,
+    uid: Uid,
+    current_state: Option<&State>,
+    stored_state: Option<&str>,
+) {
+    if let Some(current_state) = current_state {
+        let new_text = match current_state.bricklet(&uid) {
+            None => "Not found".to_string(),
+            Some(&BrickletConnectionData {
+                ref state,
+                last_change,
+                endpoint,
+                ref metadata,
+            }) => {
+                let timestamp = DateTime::<Local>::from(last_change);
+                if let Some(BrickletMetadata {
+                    connected_uid,
+                    position,
+                    hardware_version,
+                    firmware_version,
+                }) = metadata
+                {
+                    format!("{state}, {timestamp}, {endpoint}; {connected_uid}, {position}")
+                } else {
+                    format!("{state}, {timestamp}, {endpoint}")
+                }
+            }
+        };
+        if stored_state != Some(&new_text) {
+            updates.push(ValueRange {
+                major_dimension: None,
+                range: Some(format!("{}!{}", sheet_name, cell_coordinates)),
+                values: Some(vec![vec![new_text.into()]]),
+            });
+        }
+    }
 }
 
 fn find_sheet_by_name<'a>(sheet: &'a Spreadsheet, name_of_sheet: &str) -> Option<&'a GridData> {
@@ -1446,7 +1534,7 @@ mod test {
     #[tokio::test]
     async fn test_read_sheet() {
         env_logger::init_from_env(Env::default().filter_or("LOG_LEVEL", "info"));
-        let result = read_sheet_data().await;
+        let result = read_sheet_data(None).await;
         match result {
             Ok(Some(wiring)) => {
                 info!("Loaded data: \n{}", serde_yaml::to_string(&wiring).unwrap());

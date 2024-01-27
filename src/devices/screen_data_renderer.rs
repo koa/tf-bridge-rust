@@ -5,15 +5,13 @@ use std::{
 };
 
 use chrono::{DateTime, Local, Timelike};
-use embedded_graphics::mono_font::iso_8859_1::FONT_10X20;
-use embedded_graphics::prelude::Dimensions;
 use embedded_graphics::{
     draw_target::DrawTarget,
     geometry::Point,
     image::Image,
-    mono_font::{iso_8859_1::FONT_6X12, MonoTextStyle},
+    mono_font::{iso_8859_1::FONT_10X20, iso_8859_1::FONT_6X12, MonoTextStyle},
     pixelcolor::BinaryColor,
-    prelude::PixelColor,
+    prelude::{Dimensions, PixelColor},
     primitives::Rectangle,
     text::Text,
 };
@@ -23,23 +21,30 @@ use simple_layout::prelude::{
     vertical_layout, DashedLine, Layoutable, RoundedLine,
 };
 use thiserror::Error;
-use tinkerforge_async::lcd_128x64_bricklet::LCD_128X64_BRICKLET_STATUS_LED_CONFIG_OFF;
 use tinkerforge_async::{
-    error::TinkerforgeError, lcd_128x64_bricklet::Lcd128x64Bricklet,
-    lcd_128x64_bricklet::TouchPositionEvent,
+    error::TinkerforgeError,
+    lcd_128x64_bricklet::{
+        Lcd128x64Bricklet, TouchPositionEvent, LCD_128X64_BRICKLET_STATUS_LED_CONFIG_OFF,
+    },
 };
 use tokio::{
     join,
-    sync::mpsc::{self, error::SendError, Receiver, Sender},
+    sync::mpsc::{self, error::SendError},
     task::JoinHandle,
     time::sleep,
 };
 use tokio_stream::{empty, wrappers::ReceiverStream, StreamExt, StreamNotifyClose};
 use tokio_util::either::Either;
 
-use crate::data::wiring::{Orientation, ScreenSettings};
 use crate::{
-    data::registry::EventRegistry, devices::display::Lcd128x64BrickletDisplay, icons, util,
+    data::{
+        registry::EventRegistry,
+        wiring::{Orientation, ScreenSettings},
+    },
+    devices::display::Lcd128x64BrickletDisplay,
+    icons,
+    terminator::{TestamentReceiver, TestamentSender},
+    util,
 };
 
 const TEXT_STYLE: MonoTextStyle<BinaryColor> = MonoTextStyle::new(&FONT_6X12, BinaryColor::On);
@@ -361,10 +366,10 @@ pub async fn start_screen_thread(
     bricklet: Lcd128x64Bricklet,
     event_registry: EventRegistry,
     settings: ScreenSettings,
-) -> Sender<()> {
-    let (tx, rx) = mpsc::channel(1);
+) -> TestamentSender {
+    let (testament, final_stream) = TestamentSender::create();
     tokio::spawn(async move {
-        match screen_thread_loop(bricklet, event_registry, rx, settings).await {
+        match screen_thread_loop(bricklet, event_registry, final_stream, settings).await {
             Ok(()) => {
                 info!("Screen thread ended");
             }
@@ -373,7 +378,7 @@ pub async fn start_screen_thread(
             }
         }
     });
-    tx
+    testament
 }
 
 #[derive(Debug, Error)]
@@ -418,7 +423,7 @@ pub async fn show_debug_text(
 async fn screen_thread_loop(
     mut bricklet: Lcd128x64Bricklet,
     event_registry: EventRegistry,
-    termination_receiver: Receiver<()>,
+    termination_receiver: TestamentReceiver,
     settings: ScreenSettings,
 ) -> Result<(), ScreenDataError> {
     let ScreenSettings {
@@ -508,7 +513,11 @@ async fn screen_thread_loop(
         .merge(update_color_stream)
         .merge(update_brightness_stream)
         .merge(ReceiverStream::new(rx))
-        .merge(ReceiverStream::new(termination_receiver).map(|_| ScreenMessage::Closed));
+        .merge(
+            termination_receiver
+                .send_on_terminate(ScreenMessage::Closed)
+                .map(|_| ScreenMessage::Closed),
+        );
 
     let mut dimm_timer_handle = None::<JoinHandle<()>>;
     let mut screen = screen_data(

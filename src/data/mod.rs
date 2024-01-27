@@ -15,6 +15,7 @@ pub(crate) mod google_data;
 mod register;
 pub mod registry;
 pub mod settings;
+pub mod state;
 pub mod wiring;
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Default, Ord, PartialOrd)]
@@ -26,13 +27,17 @@ pub struct Room {
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Default, Ord, PartialOrd)]
 pub struct Uid(u32);
 
-#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Default, Serialize, Deserialize, Ord, PartialOrd)]
+#[derive(
+    Copy, Clone, Eq, PartialEq, Hash, Debug, Default, Serialize, Deserialize, Ord, PartialOrd,
+)]
 pub struct DeviceInRoom {
     pub room: Room,
     pub idx: u16,
 }
 
-#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Default, Serialize, Deserialize, Ord, PartialOrd)]
+#[derive(
+    Copy, Clone, Eq, PartialEq, Hash, Debug, Default, Serialize, Deserialize, Ord, PartialOrd,
+)]
 pub struct SubDeviceInRoom {
     pub room: Room,
     pub device_idx: u16,

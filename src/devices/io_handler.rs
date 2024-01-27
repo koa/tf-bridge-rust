@@ -1,10 +1,14 @@
 use core::option::Option;
+use std::net::IpAddr;
 use std::pin::Pin;
+use std::str::FromStr;
 use std::task::{Context, Poll};
 
 use futures::Stream;
 use log::{error, info};
 use thiserror::Error;
+use tinkerforge_async::base58::Base58Error;
+use tinkerforge_async::io16_v2_bricklet::IO16_V2_BRICKLET_STATUS_LED_CONFIG_OFF;
 use tinkerforge_async::{
     error::TinkerforgeError,
     io16_bricklet::{InterruptEvent, Io16Bricklet},
@@ -14,20 +18,24 @@ use tokio::{sync::mpsc, task::JoinHandle, time::sleep};
 use tokio_stream::{empty, wrappers::ReceiverStream, StreamExt};
 use tokio_util::either::Either;
 
+use crate::data::state::StateUpdateMessage;
 use crate::data::{
     registry::{ButtonState, DualButtonLayout, EventRegistry, SingleButtonLayout},
     wiring::ButtonSetting,
 };
+use crate::terminator::{TestamentReceiver, TestamentSender};
 
 pub async fn handle_io16(
     bricklet: Io16Bricklet,
     event_registry: EventRegistry,
     buttons: &[ButtonSetting],
-) -> mpsc::Sender<()> {
-    let (tx, rx) = mpsc::channel(1);
+    status_updater: mpsc::Sender<StateUpdateMessage>,
+    ip_addr: IpAddr,
+) -> TestamentSender {
+    let (tx, rx) = TestamentSender::create();
     let channel_settings = collect_16_channel_settings(event_registry, buttons).await;
     tokio::spawn(async move {
-        let result = io_16_v1_loop(bricklet, rx, channel_settings).await;
+        let result = io_16_v1_loop(bricklet, rx, channel_settings, status_updater, ip_addr).await;
         match result {
             Err(error) => {
                 error!("Cannot communicate with Io16V2Bricklet: {error}");
@@ -122,12 +130,17 @@ impl Iterator for ByteMaskIterator {
 
 async fn io_16_v1_loop(
     mut bricklet: Io16Bricklet,
-    rx: mpsc::Receiver<()>,
+    rx: TestamentReceiver,
     channel_settings: [ChannelSetting; 16],
+    status_updater: mpsc::Sender<StateUpdateMessage>,
+    ip_addr: IpAddr,
 ) -> Result<(), IoHandlerError> {
-    bricklet.set_debounce_period(100).await?;
+    bricklet.set_debounce_period(30).await?;
     bricklet.set_port_interrupt('a', 0xff).await?;
     bricklet.set_port_interrupt('b', 0xff).await?;
+    let id = bricklet.get_identity().await?;
+    let uid = id.uid.parse()?;
+    status_updater.send((ip_addr, id).try_into()?).await?;
     let button_event_stream = futures::StreamExt::flat_map(
         bricklet.get_interrupt_callback_receiver().await,
         move |InterruptEvent {
@@ -150,18 +163,33 @@ async fn io_16_v1_loop(
             }
         },
     );
-    io_16_loop(rx, channel_settings, button_event_stream).await
+    io_16_loop(
+        rx,
+        channel_settings,
+        button_event_stream,
+        status_updater.clone(),
+    )
+    .await?;
+    status_updater
+        .send(StateUpdateMessage::BrickletDisconnected {
+            uid,
+            endpoint: ip_addr,
+        })
+        .await?;
+    Ok(())
 }
 
 pub async fn handle_io16_v2(
     bricklet: Io16V2Bricklet,
     event_registry: EventRegistry,
     buttons: &[ButtonSetting],
-) -> mpsc::Sender<()> {
-    let (tx, rx) = mpsc::channel(1);
+    status_updater: mpsc::Sender<StateUpdateMessage>,
+    ip_addr: IpAddr,
+) -> TestamentSender {
+    let (tx, rx) = TestamentSender::create();
     let channel_settings = collect_16_channel_settings(event_registry, buttons).await;
     tokio::spawn(async move {
-        match io_16_v2_loop(bricklet, rx, channel_settings).await {
+        match io_16_v2_loop(bricklet, rx, channel_settings, status_updater, ip_addr).await {
             Err(error) => {
                 error!("Cannot communicate with Io16V2Bricklet: {error}");
             }
@@ -191,9 +219,16 @@ enum ChannelSetting {
 
 async fn io_16_v2_loop(
     mut bricklet: Io16V2Bricklet,
-    termination_receiver: mpsc::Receiver<()>,
+    termination_receiver: TestamentReceiver,
     channel_settings: [ChannelSetting; 16],
+    status_updater: mpsc::Sender<StateUpdateMessage>,
+    ip_addr: IpAddr,
 ) -> Result<(), IoHandlerError> {
+    for i in 0..16 {
+        bricklet
+            .set_input_value_callback_configuration(i, 20, true)
+            .await?;
+    }
     let button_event_stream = bricklet
         .get_input_value_callback_receiver()
         .await
@@ -204,19 +239,38 @@ async fn io_16_v2_loop(
                 IoMessage::Release(event.channel)
             }
         });
-
-    io_16_loop(termination_receiver, channel_settings, button_event_stream).await
+    bricklet
+        .set_status_led_config(IO16_V2_BRICKLET_STATUS_LED_CONFIG_OFF)
+        .await?;
+    let identity = bricklet.get_identity().await?;
+    let uid = identity.uid.parse()?;
+    status_updater.send((ip_addr, identity).try_into()?).await?;
+    io_16_loop(
+        termination_receiver,
+        channel_settings,
+        button_event_stream,
+        status_updater.clone(),
+    )
+    .await?;
+    status_updater
+        .send(StateUpdateMessage::BrickletDisconnected {
+            uid,
+            endpoint: ip_addr,
+        })
+        .await?;
+    Ok(())
 }
 
 async fn io_16_loop(
-    termination_receiver: mpsc::Receiver<()>,
+    termination_receiver: TestamentReceiver,
     channel_settings: [ChannelSetting; 16],
     button_event_stream: impl Stream<Item = IoMessage> + Sized + Unpin,
+    status_updater: mpsc::Sender<StateUpdateMessage>,
 ) -> Result<(), IoHandlerError> {
     let (rx, tx) = mpsc::channel(2);
     let mut channel_timer: [Option<JoinHandle<()>>; 16] = <[Option<JoinHandle<()>>; 16]>::default();
     let mut receiver = button_event_stream
-        .merge(ReceiverStream::new(termination_receiver).map(|_| IoMessage::Close))
+        .merge(termination_receiver.send_on_terminate(IoMessage::Close))
         .merge(ReceiverStream::new(tx));
     while let Some(message) = receiver.next().await {
         match message {
@@ -331,6 +385,10 @@ pub enum IoHandlerError {
     DualButtonRelease(mpsc::error::SendError<ButtonState<DualButtonLayout>>),
     #[error("Cannot send Single button Release: {0}")]
     SingleButtonRelease(mpsc::error::SendError<ButtonState<SingleButtonLayout>>),
+    #[error("Cannot parse Uid")]
+    UidParse(#[from] Base58Error),
+    #[error("Cannot update device status")]
+    StateUpdate(#[from] mpsc::error::SendError<StateUpdateMessage>),
 }
 
 #[cfg(test)]

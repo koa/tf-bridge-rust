@@ -8,16 +8,19 @@ use tinkerforge_async::{
     },
 };
 use tokio::sync::mpsc;
-use tokio_stream::{wrappers::ReceiverStream, StreamExt};
+use tokio_stream::StreamExt;
 
-use crate::data::registry::{EventRegistry, TemperatureKey};
+use crate::{
+    data::registry::{EventRegistry, TemperatureKey},
+    terminator::{TestamentReceiver, TestamentSender},
+};
 
 pub fn handle_temperature(
     bricklet: TemperatureV2Bricklet,
     event_registry: EventRegistry,
     temperature_key: TemperatureKey,
-) -> mpsc::Sender<()> {
-    let (tx, rx) = mpsc::channel(1);
+) -> TestamentSender {
+    let (tx, rx) = TestamentSender::create();
     tokio::spawn(async move {
         if let Err(error) = temperature_task(bricklet, event_registry, temperature_key, rx).await {
             error!("Error processing temperature: {error}");
@@ -41,7 +44,7 @@ async fn temperature_task(
     mut bricklet: TemperatureV2Bricklet,
     event_registry: EventRegistry,
     temperature_key: TemperatureKey,
-    termination_receiver: mpsc::Receiver<()>,
+    termination_receiver: TestamentReceiver,
 ) -> Result<(), TemperatureError> {
     bricklet
         .set_status_led_config(TEMPERATURE_V2_BRICKLET_STATUS_LED_CONFIG_OFF)
@@ -60,7 +63,7 @@ async fn temperature_task(
         .get_temperature_callback_receiver()
         .await
         .map(|t| TemperatureEvent::Temperature(t as f32 / 100.0))
-        .merge(ReceiverStream::new(termination_receiver).map(|_| TemperatureEvent::Closed));
+        .merge(termination_receiver.send_on_terminate(TemperatureEvent::Closed));
     let sender = event_registry.temperature_sender(temperature_key).await;
     sender
         .send(bricklet.get_temperature().await? as f32 / 100.0)

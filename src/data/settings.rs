@@ -63,6 +63,7 @@ pub struct GoogleEndpointData {
     sheet: Box<str>,
     range: Box<str>,
     address: Box<str>,
+    state: Box<str>,
 }
 #[derive(Deserialize, Debug)]
 pub struct GoogleButtonData {
@@ -74,6 +75,7 @@ pub struct GoogleButtonData {
     button_type: Box<str>,
     device_address: Box<str>,
     first_input_idx: Box<str>,
+    state: Box<str>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -107,6 +109,7 @@ pub struct GoogleLightData {
     presence_detectors: Box<[Box<str>]>,
     touchscreen_whitebalance: Box<str>,
     touchscreen_brightness: Box<str>,
+    state: Box<str>,
 }
 #[derive(Deserialize, Debug)]
 pub struct GoogleRoomController {
@@ -121,6 +124,8 @@ pub struct GoogleRoomController {
     enable_heat_control: Box<str>,
     enable_whitebalance_control: Box<str>,
     enable_brightness_control: Box<str>,
+    touchscreen_state: Box<str>,
+    temperature_state: Box<str>,
 }
 #[derive(Deserialize, Debug)]
 pub struct GoogleMotionDetectors {
@@ -130,6 +135,7 @@ pub struct GoogleMotionDetectors {
     device_address: Box<str>,
     id: Box<str>,
     idx: Box<str>,
+    state: Box<str>,
 }
 #[derive(Deserialize, Debug)]
 pub struct GoogleRelay {
@@ -142,6 +148,7 @@ pub struct GoogleRelay {
     device_channel: Box<str>,
     temperature_sensor: Box<str>,
     ring_button: Box<str>,
+    state: Box<str>,
 }
 #[derive(Error, Debug)]
 pub enum GoogleError {
@@ -215,6 +222,9 @@ impl GoogleEndpointData {
     pub fn address(&self) -> &str {
         &self.address
     }
+    pub fn state(&self) -> &str {
+        &self.state
+    }
 }
 impl GoogleLightTemplateData {
     pub fn sheet(&self) -> &str {
@@ -275,6 +285,9 @@ impl GoogleLightData {
     pub fn touchscreen_brightness(&self) -> &str {
         &self.touchscreen_brightness
     }
+    pub fn state(&self) -> &str {
+        &self.state
+    }
 }
 
 impl GoogleButtonData {
@@ -301,6 +314,10 @@ impl GoogleButtonData {
     }
     pub fn first_input_idx(&self) -> &str {
         &self.first_input_idx
+    }
+
+    pub fn state(&self) -> &str {
+        &self.state
     }
 }
 impl GoogleButtonTemplate {
@@ -358,6 +375,13 @@ impl GoogleRoomController {
     pub fn enable_brightness_control(&self) -> &str {
         &self.enable_brightness_control
     }
+
+    pub fn touchscreen_state(&self) -> &str {
+        &self.touchscreen_state
+    }
+    pub fn temperature_state(&self) -> &str {
+        &self.temperature_state
+    }
 }
 impl GoogleMotionDetectors {
     pub fn sheet(&self) -> &str {
@@ -377,6 +401,9 @@ impl GoogleMotionDetectors {
     }
     pub fn idx(&self) -> &str {
         &self.idx
+    }
+    pub fn state(&self) -> &str {
+        &self.state
     }
 }
 impl GoogleRelay {
@@ -407,6 +434,9 @@ impl GoogleRelay {
 
     pub fn idx(&self) -> &str {
         &self.idx
+    }
+    pub fn state(&self) -> &str {
+        &self.state
     }
 }
 

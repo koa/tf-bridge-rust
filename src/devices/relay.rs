@@ -11,13 +11,14 @@ use tokio::{
 use tokio_stream::{wrappers::ReceiverStream, StreamExt};
 
 use crate::data::{registry::EventRegistry, wiring::RelayChannelEntry};
+use crate::terminator::TestamentSender;
 
 pub async fn handle_quad_relay(
     bricklet: IndustrialQuadRelayV2Bricklet,
     event_registry: &EventRegistry,
     inputs: &[RelayChannelEntry],
-) -> Sender<()> {
-    let (tx, rx) = mpsc::channel(1);
+) -> TestamentSender {
+    let (tx, rx) = TestamentSender::create();
     let mut streams = SelectAll::new();
     for channel_entry in inputs {
         let channel = channel_entry.channel;
@@ -28,7 +29,7 @@ pub async fn handle_quad_relay(
                 .map(move |state| RelayMsg::SetState(channel, state)),
         );
     }
-    let input_streams = streams.merge(ReceiverStream::new(rx).map(|_| RelayMsg::Closed));
+    let input_streams = streams.merge(rx.send_on_terminate(RelayMsg::Closed));
     tokio::spawn(async move {
         if let Err(error) = quad_relay_task(bricklet, input_streams).await {
             error!("Error processing relay: {error}");

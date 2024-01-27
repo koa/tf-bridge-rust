@@ -11,13 +11,14 @@ use tokio::time::sleep;
 use tokio_stream::{wrappers::ReceiverStream, StreamExt};
 
 use crate::data::registry::{ButtonState, EventRegistry, SingleButtonKey, SingleButtonLayout};
+use crate::terminator::{TestamentReceiver, TestamentSender};
 
 pub fn handle_motion_detector(
     bricklet: MotionDetectorV2Bricklet,
     event_registry: EventRegistry,
     single_button_key: SingleButtonKey,
-) -> mpsc::Sender<()> {
-    let (tx, rx) = mpsc::channel(1);
+) -> TestamentSender {
+    let (tx, rx) = TestamentSender::create();
     tokio::spawn(async move {
         if let Err(error) =
             motion_detector_task(bricklet, event_registry, single_button_key, rx).await
@@ -43,7 +44,7 @@ async fn motion_detector_task(
     mut bricklet: MotionDetectorV2Bricklet,
     event_registry: EventRegistry,
     single_button_key: SingleButtonKey,
-    termination_receiver: mpsc::Receiver<()>,
+    termination_receiver: TestamentReceiver,
 ) -> Result<(), MotionDetectorError> {
     bricklet.set_sensitivity(100).await?;
     let (tx, rx) = mpsc::channel(2);
@@ -53,7 +54,7 @@ async fn motion_detector_task(
         .get_motion_detected_callback_receiver()
         .await
         .map(|_| MotionDetectionEvent::MotionStarted)
-        .merge(ReceiverStream::new(termination_receiver).map(|_| MotionDetectionEvent::Closed))
+        .merge(termination_receiver.send_on_terminate(MotionDetectionEvent::Closed))
         .merge(ReceiverStream::new(rx));
     let mut timer_handle = None::<JoinHandle<()>>;
 
