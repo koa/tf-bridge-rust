@@ -233,6 +233,7 @@ pub async fn read_sheet_data(state: Option<&State>) -> Result<Option<Wiring>, Go
             config,
             &spreadsheet_methods,
             &sheet,
+            state,
             &mut relays,
             &mut ring_controllers,
             &mut single_button_adresses,
@@ -351,6 +352,7 @@ async fn parse_relays<'a>(
     config: &'a GoogleSheet,
     spreadsheet_methods: &SpreadsheetMethods<'_, HttpsConnector<HttpConnector>>,
     sheet: &Spreadsheet,
+    state: Option<&State>,
     relays: &mut BTreeMap<Uid, RelaySettings>,
     ring_controllers: &mut Vec<RingController>,
     single_buttons: &mut HashMap<Cow<'a, str>, SingleButtonKey>,
@@ -377,7 +379,7 @@ async fn parse_relays<'a>(
     if let Some(relay_grid) = find_sheet_by_name(sheet, relay_configs.sheet()) {
         let (start_row, start_column, mut rows) = get_grid_and_coordinates(relay_grid);
         if let Some((_, header)) = rows.next() {
-            let [room_id_column, /*id_column,*/ idx_column, device_address_column, device_channel_column, temperature_column, ring_button_column] =
+            let [room_id_column, /*id_column,*/ idx_column, device_address_column, device_channel_column, temperature_column, ring_button_column,state_column] =
                 parse_headers(
                     header,
                     [
@@ -388,10 +390,12 @@ async fn parse_relays<'a>(
                         relay_configs.device_channel(),
                         relay_configs.temperature_sensor(),
                         relay_configs.ring_button(),
+                        relay_configs.state()
                     ],
                 )
                 .map_err(GoogleDataError::RelayHeader)?;
             let mut device_ids_of_rooms = HashMap::<_, Vec<_>>::new();
+            let mut updates = Vec::new();
             for (row_idx, row) in rows {
                 if let (
                     Some(room),
@@ -401,6 +405,7 @@ async fn parse_relays<'a>(
                     Some(channel),
                     temperature,
                     ring_button,
+                    old_state,
                 ) = (
                     get_cell_content(row, room_id_column)
                         .map(Room::from_str)
@@ -417,6 +422,7 @@ async fn parse_relays<'a>(
                     get_cell_content(row, ring_button_column)
                         .and_then(|k| single_buttons.get(k))
                         .copied(),
+                    get_cell_content(row, state_column),
                 ) {
                     if let Some(temp_input) = temperature {
                         relay_channels
@@ -441,9 +447,19 @@ async fn parse_relays<'a>(
                             },
                         ));
                     }
+                    update_state(
+                        &mut updates,
+                        relay_configs.sheet(),
+                        CellCoordinates {
+                            row: row_idx + start_row,
+                            col: state_column + start_column,
+                        },
+                        uid,
+                        state,
+                        old_state,
+                    );
                 }
             }
-            let mut updates = Vec::new();
             let ring_rows =
                 adjust_device_idx(device_ids_of_rooms, relay_configs.sheet(), &mut updates).await?;
             write_updates_to_sheet(config, spreadsheet_methods, updates).await?;
