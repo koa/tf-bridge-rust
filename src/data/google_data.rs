@@ -198,6 +198,7 @@ pub async fn read_sheet_data(state: Option<&State>) -> Result<Option<Wiring>, Go
             config,
             &spreadsheet_methods,
             &sheet,
+            state,
             &mut motion_detector_sensors,
             &mut motion_detector_adresses,
         )
@@ -707,6 +708,7 @@ async fn parse_motion_detectors<'a>(
     config: &GoogleSheet,
     spreadsheet_methods: &SpreadsheetMethods<'_, HttpsConnector<HttpConnector>>,
     sheet: &'a Spreadsheet,
+    state: Option<&State>,
     motion_detectors: &mut BTreeMap<Uid, MotionDetectorSettings>,
     single_button_adresses: &mut HashMap<&'a str, SingleButtonKey>,
 ) -> Result<(), GoogleDataError> {
@@ -729,19 +731,21 @@ async fn parse_motion_detectors<'a>(
     if let Some(motion_detector_grid) = find_sheet_by_name(sheet, md_config.sheet()) {
         let (start_row, start_column, mut rows) = get_grid_and_coordinates(motion_detector_grid);
         if let Some((_, header)) = rows.next() {
-            let [room_column, address_column, id_column, idx_column] = parse_headers(
+            let [room_column, address_column, id_column, idx_column, state_column] = parse_headers(
                 header,
                 [
                     md_config.room_id(),
                     md_config.device_address(),
                     md_config.id(),
                     md_config.idx(),
+                    md_config.state(),
                 ],
             )
             .map_err(GoogleDataError::MotionDetectorHeader)?;
             let mut device_ids_of_rooms = HashMap::<_, Vec<_>>::new();
+            let mut updates = Vec::new();
             for (row_idx, row) in rows {
-                if let (Some(room), Some(device_address), Some(id), idx) = (
+                if let (Some(room), Some(device_address), Some(id), idx, old_state) = (
                     get_cell_content(row, room_column)
                         .map(Room::from_str)
                         .and_then(Result::ok),
@@ -750,6 +754,7 @@ async fn parse_motion_detectors<'a>(
                         .and_then(Result::ok),
                     get_cell_content(row, id_column),
                     get_cell_integer(row, idx_column).map(|v| v as u16),
+                    get_cell_content(row, state_column),
                 ) {
                     let row = row_idx + start_row;
                     let col = idx_column + start_column;
@@ -762,9 +767,19 @@ async fn parse_motion_detectors<'a>(
                             idx,
                         },
                     ));
+                    update_state(
+                        &mut updates,
+                        md_config.sheet(),
+                        CellCoordinates {
+                            row,
+                            col: state_column + start_column,
+                        },
+                        device_address,
+                        state,
+                        old_state,
+                    );
                 }
             }
-            let mut updates = Vec::new();
 
             let motion_detector_rows =
                 adjust_device_idx(device_ids_of_rooms, md_config.sheet(), &mut updates).await?;

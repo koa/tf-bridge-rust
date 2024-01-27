@@ -242,6 +242,9 @@ async fn run_enumeration_listener(
                                                 ),
                                                 event_registry.clone(),
                                                 settings.output,
+                                                uid,
+                                                status_updater.clone(),
+                                                addr.0,
                                             ),
                                         )
                                         .await;

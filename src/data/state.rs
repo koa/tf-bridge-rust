@@ -7,7 +7,7 @@ use std::time::SystemTime;
 use tinkerforge_async::base58::Base58Error;
 use tinkerforge_async::{
     dmx_bricklet, industrial_quad_relay_v2_bricklet, io16_bricklet, io16_v2_bricklet,
-    lcd_128x64_bricklet, temperature_v2_bricklet,
+    lcd_128x64_bricklet, motion_detector_v2_bricklet, temperature_v2_bricklet,
 };
 
 use crate::data::Uid;
@@ -123,6 +123,24 @@ impl TryFrom<(IpAddr, temperature_v2_bricklet::Identity)> for StateUpdateMessage
 
     fn try_from(
         (endpoint, id): (IpAddr, temperature_v2_bricklet::Identity),
+    ) -> Result<Self, Self::Error> {
+        Ok(StateUpdateMessage::BrickletConnected {
+            uid: id.uid.parse()?,
+            endpoint,
+            metadata: BrickletMetadata {
+                connected_uid: id.connected_uid.parse()?,
+                position: id.position,
+                hardware_version: id.hardware_version,
+                firmware_version: id.firmware_version,
+            },
+        })
+    }
+}
+impl TryFrom<(IpAddr, motion_detector_v2_bricklet::Identity)> for StateUpdateMessage {
+    type Error = Base58Error;
+
+    fn try_from(
+        (endpoint, id): (IpAddr, motion_detector_v2_bricklet::Identity),
     ) -> Result<Self, Self::Error> {
         Ok(StateUpdateMessage::BrickletConnected {
             uid: id.uid.parse()?,
