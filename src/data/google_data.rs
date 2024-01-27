@@ -206,6 +206,7 @@ pub async fn read_sheet_data(state: Option<&State>) -> Result<Option<Wiring>, Go
             config,
             &spreadsheet_methods,
             &sheet,
+            state,
             &mut lcd_screens,
             &mut temperature_sensors,
             &mut heat_controllers,
@@ -497,6 +498,7 @@ async fn parse_controllers<'a>(
     config: &GoogleSheet,
     spreadsheet_methods: &SpreadsheetMethods<'_, HttpsConnector<HttpConnector>>,
     sheet: &'a Spreadsheet,
+    state: Option<&State>,
     lcd_screens: &mut BTreeMap<Uid, ScreenSettings>,
     temperature_sensors: &mut BTreeMap<Uid, TemperatureSettings>,
     heat_controllers: &mut Vec<HeatController>,
@@ -529,7 +531,7 @@ async fn parse_controllers<'a>(
     if let Some(controller_grid) = find_sheet_by_name(sheet, controllers.sheet()) {
         let (start_row, start_column, mut rows) = get_grid_and_coordinates(controller_grid);
         if let Some((_, header)) = rows.next() {
-            let [room_column, id_column, index_column, orientation_column, touchscreen_column, temperature_column, heat_control_column, whitebalance_control_column, brightness_control_column] =
+            let [room_column, id_column, index_column, orientation_column, touchscreen_column, temperature_column, heat_control_column, whitebalance_control_column, brightness_control_column, touchscreen_state_column, temperature_state_column] =
                 parse_headers(
                     header,
                     [
@@ -542,11 +544,15 @@ async fn parse_controllers<'a>(
                         controllers.enable_heat_control(),
                         controllers.enable_whitebalance_control(),
                         controllers.enable_brightness_control(),
+                        controllers.touchscreen_state(),
+                        controllers.temperature_state(),
                     ],
                 )
                 .map_err(GoogleDataError::ControllerHeader)?;
 
             let mut device_ids_of_rooms = HashMap::<_, Vec<_>>::new();
+            let mut updates = Vec::new();
+
             for (row_idx, row) in rows {
                 if let (
                     Some(room),
@@ -558,6 +564,8 @@ async fn parse_controllers<'a>(
                     enable_heatcontrol,
                     enable_whitebalance_control,
                     enable_brighness_control,
+                    touchscreen_state,
+                    tempareature_state,
                 ) = (
                     get_cell_content(row, room_column)
                         .map(Room::from_str)
@@ -582,6 +590,8 @@ async fn parse_controllers<'a>(
                     get_cell_content(row, brightness_control_column)
                         .map(|v| !v.is_empty())
                         .unwrap_or(false),
+                    get_cell_content(row, touchscreen_state_column),
+                    get_cell_content(row, temperature_state_column),
                 ) {
                     let row = row_idx + start_row;
                     let col = index_column + start_column;
@@ -599,9 +609,34 @@ async fn parse_controllers<'a>(
                             enable_brighness_control,
                         },
                     ));
+                    if let Some(uid) = touchscreen {
+                        update_state(
+                            &mut updates,
+                            controllers.sheet(),
+                            CellCoordinates {
+                                row,
+                                col: touchscreen_state_column + start_column,
+                            },
+                            uid,
+                            state,
+                            touchscreen_state,
+                        );
+                    }
+                    if let Some(uid) = temp_sensor {
+                        update_state(
+                            &mut updates,
+                            controllers.sheet(),
+                            CellCoordinates {
+                                row,
+                                col: temperature_state_column + start_column,
+                            },
+                            uid,
+                            state,
+                            tempareature_state,
+                        );
+                    }
                 }
             }
-            let mut updates = Vec::new();
 
             let controller_rows =
                 adjust_device_idx(device_ids_of_rooms, controllers.sheet(), &mut updates).await?;

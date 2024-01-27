@@ -145,6 +145,9 @@ async fn run_enumeration_listener(
                                                 Lcd128x64Bricklet::new(uid.into(), ipcon.clone()),
                                                 event_registry.clone(),
                                                 *screen_settings,
+                                                uid,
+                                                status_updater.clone(),
+                                                addr.0,
                                             )
                                             .await,
                                         )
@@ -260,6 +263,9 @@ async fn run_enumeration_listener(
                                                 ),
                                                 event_registry.clone(),
                                                 settings.output,
+                                                uid,
+                                                status_updater.clone(),
+                                                addr.0,
                                             ),
                                         )
                                         .await;

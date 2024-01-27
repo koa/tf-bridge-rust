@@ -1,3 +1,4 @@
+use std::net::IpAddr;
 use std::{
     marker::PhantomData,
     num::Saturating,
@@ -21,6 +22,7 @@ use simple_layout::prelude::{
     vertical_layout, DashedLine, Layoutable, RoundedLine,
 };
 use thiserror::Error;
+use tinkerforge_async::base58::Base58Error;
 use tinkerforge_async::{
     error::TinkerforgeError,
     lcd_128x64_bricklet::{
@@ -36,6 +38,8 @@ use tokio::{
 use tokio_stream::{empty, wrappers::ReceiverStream, StreamExt, StreamNotifyClose};
 use tokio_util::either::Either;
 
+use crate::data::state::StateUpdateMessage;
+use crate::data::Uid;
 use crate::{
     data::{
         registry::EventRegistry,
@@ -366,17 +370,36 @@ pub async fn start_screen_thread(
     bricklet: Lcd128x64Bricklet,
     event_registry: EventRegistry,
     settings: ScreenSettings,
+    uid: Uid,
+    status_updater: mpsc::Sender<StateUpdateMessage>,
+    ip_addr: IpAddr,
 ) -> TestamentSender {
     let (testament, final_stream) = TestamentSender::create();
     tokio::spawn(async move {
-        match screen_thread_loop(bricklet, event_registry, final_stream, settings).await {
+        match screen_thread_loop(
+            bricklet,
+            event_registry,
+            final_stream,
+            settings,
+            status_updater.clone(),
+            ip_addr,
+        )
+        .await
+        {
             Ok(()) => {
                 info!("Screen thread ended");
             }
             Err(e) => {
-                error!("Broke screen thread: {e}")
+                error!("Broke screen thread: {e}");
             }
         }
+        status_updater
+            .send(StateUpdateMessage::BrickletDisconnected {
+                uid,
+                endpoint: ip_addr,
+            })
+            .await
+            .expect("Cannot send state update");
     });
     testament
 }
@@ -391,6 +414,10 @@ pub enum ScreenDataError {
     UpdateWhitebalance(SendError<Saturating<u16>>),
     #[error("Cannot update brightness {0}")]
     UpdateBrightness(SendError<Saturating<u8>>),
+    #[error("Cannot send state update {0}")]
+    StateUpdate(#[from] mpsc::error::SendError<StateUpdateMessage>),
+    #[error("Cannot parse UID {0}")]
+    Uid(#[from] Base58Error),
 }
 enum ScreenMessage {
     Touched(Point),
@@ -425,6 +452,8 @@ async fn screen_thread_loop(
     event_registry: EventRegistry,
     termination_receiver: TestamentReceiver,
     settings: ScreenSettings,
+    status_updater: mpsc::Sender<StateUpdateMessage>,
+    ip_addr: IpAddr,
 ) -> Result<(), ScreenDataError> {
     let ScreenSettings {
         orientation,
@@ -437,6 +466,8 @@ async fn screen_thread_loop(
     bricklet
         .set_status_led_config(LCD_128X64_BRICKLET_STATUS_LED_CONFIG_OFF)
         .await?;
+    let id = bricklet.get_identity().await?;
+    status_updater.send((ip_addr, id).try_into()?).await?;
     let mut display = Lcd128x64BrickletDisplay::new(bricklet, orientation).await?;
     display.set_backlight(0).await?;
     let (tx, rx) = mpsc::channel(2);
