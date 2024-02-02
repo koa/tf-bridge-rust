@@ -2375,6 +2375,7 @@ dependencies = [
  "prometheus",
  "ron 0.8.1",
  "serde",
+ "serde_json",
  "serde_yaml",
  "simple-layout",
  "strum",

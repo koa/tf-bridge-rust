@@ -1,12 +1,13 @@
-use std::collections::BTreeMap;
-use std::net::IpAddr;
 use std::{
     borrow::Cow,
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     fmt::{Debug, Display, Formatter, Write},
     io,
+    net::IpAddr,
+    ops::IndexMut,
     str::FromStr,
     time::Duration,
+    vec::IntoIter,
 };
 
 use chrono::{DateTime, Local};
@@ -19,12 +20,10 @@ use google_sheets4::{
     oauth2::{authenticator::Authenticator, ServiceAccountAuthenticator},
     Sheets,
 };
-use log::{error, info};
+use log::error;
 use serde::Deserialize;
-use serde_yaml::Value;
 use thiserror::Error;
 
-use crate::data::state::{BrickletConnectionData, BrickletMetadata, State};
 use crate::{
     data::{
         registry::{
@@ -32,6 +31,7 @@ use crate::{
             SwitchOutputKey, TemperatureKey,
         },
         settings::{GoogleButtonData, GoogleButtonTemplate, GoogleError, GoogleSheet, CONFIG},
+        state::{BrickletConnectionData, BrickletMetadata, State},
         wiring::{
             ButtonSetting, Controllers, DmxConfigEntry, DmxSettings, DualInputDimmer,
             DualInputSwitch, HeatController, IoSettings, MotionDetector, MotionDetectorSettings,
@@ -67,6 +67,12 @@ pub enum GoogleDataError {
     RelayHeader(HeaderError),
     #[error("Error parsing endpoints header: {0}")]
     EndpointsHeader(HeaderError),
+    #[error("No data found in spreadsheet")]
+    NoDataFound,
+    #[error("Table contains no header")]
+    EmptyTable,
+    #[error("Error parsing headers in {1}: {0}")]
+    HeaderNotFound(HeaderError, Box<str>),
 }
 
 enum LightTemplateTypes {
@@ -181,7 +187,7 @@ pub async fn read_sheet_data(state: Option<&State>) -> Result<Option<Wiring>, Go
         let mut touchscreen_brightness_addresses = HashMap::new();
         let mut motion_detector_adresses = HashMap::new();
 
-        parse_endpoints(config, &spreadsheet_methods, &sheet, state, &mut endpoints).await?;
+        parse_endpoints(config, &spreadsheet_methods, state, &mut endpoints).await?;
         parse_buttons(
             config,
             button_template_config,
@@ -297,55 +303,42 @@ pub async fn read_sheet_data(state: Option<&State>) -> Result<Option<Wiring>, Go
 async fn parse_endpoints(
     config: &GoogleSheet,
     spreadsheet_methods: &SpreadsheetMethods<'_, HttpsConnector<HttpConnector>>,
-    sheet: &Spreadsheet,
     state: Option<&State>,
     endpoints: &mut Vec<IpAddr>,
 ) -> Result<(), GoogleDataError> {
     let endpoints_config = config.endpoints();
-    if let Some(endpoint_grid) = find_sheet_by_name(sheet, endpoints_config.sheet()) {
-        let (start_row, start_column, mut rows) = get_grid_and_coordinates(endpoint_grid);
-        if let Some((_, header)) = rows.next() {
-            let [address_column, state_column] = parse_headers(
-                header,
-                [endpoints_config.address(), endpoints_config.state()],
-            )
-            .map_err(GoogleDataError::EndpointsHeader)?;
-            let mut updates = Vec::new();
-            while let Some((row_idx, row)) = rows.next() {
-                if let (Some(address), current_state) = (
-                    get_cell_content(row, address_column)
-                        .map(IpAddr::from_str)
-                        .and_then(Result::ok),
-                    get_cell_content(row, state_column),
-                ) {
-                    endpoints.push(address);
-                    if let Some(new_state) = state.and_then(|s| s.endpoint(&address)).map(|data| {
-                        format!(
-                            "{} at {}",
-                            data.state,
-                            DateTime::<Local>::from(data.last_change)
-                        )
-                    }) {
-                        if current_state != Some(&new_state) {
-                            let row = row_idx + start_row;
-                            let col = state_column + start_column;
-                            let coordinates = CellCoordinates { row, col };
-                            updates.push(ValueRange {
-                                major_dimension: None,
-                                range: Some(format!(
-                                    "{}!{}",
-                                    endpoints_config.sheet(),
-                                    coordinates
-                                )),
-                                values: Some(vec![vec![new_state.into()]]),
-                            })
-                        }
-                    }
-                }
-            }
-            write_updates_to_sheet(config, spreadsheet_methods, updates).await?;
+    let endpoints_table = GoogleTable::connect(
+        spreadsheet_methods,
+        [endpoints_config.address(), endpoints_config.state()],
+        config.spreadsheet_id(),
+        endpoints_config.sheet(),
+        endpoints_config.range(),
+    )
+    .await?;
+    let mut updates = Vec::new();
+    for (address, state_cell) in endpoints_table.filter_map(|[address, state]| {
+        address
+            .get_content()
+            .map(IpAddr::from_str)
+            .and_then(Result::ok)
+            .map(|ip| (ip, state))
+    }) {
+        endpoints.push(address);
+        if let Some(update) = state
+            .and_then(|s| s.endpoint(&address))
+            .map(|data| {
+                format!(
+                    "{} at {}",
+                    data.state,
+                    DateTime::<Local>::from(data.last_change)
+                )
+            })
+            .and_then(|new_state| state_cell.create_content_update(&new_state))
+        {
+            updates.push(update);
         }
     }
+    write_updates_to_sheet(config, spreadsheet_methods, updates).await?;
     Ok(())
 }
 
@@ -573,7 +566,7 @@ async fn parse_controllers<'a>(
                     get_cell_content(row, id_column),
                     get_cell_integer(row, index_column).map(|v| v as u16),
                     get_cell_content(row, orientation_column)
-                        .map(|v| Orientation::deserialize(Value::String(v.to_string())))
+                        .map(|v| Orientation::deserialize(serde_yaml::Value::String(v.to_string())))
                         .and_then(Result::ok),
                     get_cell_content(row, touchscreen_column)
                         .map(Uid::from_str)
@@ -1472,6 +1465,124 @@ fn get_cell_number(row: &[CellData], idx: usize) -> Option<f64> {
 }
 fn get_cell_integer(row: &[CellData], idx: usize) -> Option<i64> {
     get_cell_number(row, idx).map(|v| v.round() as i64)
+}
+struct GoogleTable<'a, const N: usize> {
+    column_indizes: [usize; N],
+    sheet_name: &'a str,
+    rows: IntoIter<(usize, Vec<CellData>)>,
+    start_row: usize,
+    start_column: usize,
+}
+
+impl<'a, const N: usize> Iterator for GoogleTable<'a, N> {
+    type Item = [GoogleCellData<'a>; N];
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.rows.next().map(|(row_idx, row_data)| {
+            let mut data = row_data.into_iter().map(Some).collect::<Vec<_>>();
+            let row = self.start_row + row_idx;
+            self.column_indizes.map(move |idx| GoogleCellData {
+                data: data.get_mut(idx).and_then(|e| e.take()),
+                sheet: &self.sheet_name,
+                coordinates: CellCoordinates {
+                    row,
+                    col: self.start_column + idx,
+                },
+            })
+        })
+    }
+}
+struct GoogleCellData<'a> {
+    data: Option<CellData>,
+    sheet: &'a str,
+    coordinates: CellCoordinates,
+}
+
+impl GoogleCellData<'_> {
+    fn get_content(&self) -> Option<&str> {
+        self.data
+            .as_ref()
+            .and_then(|c| c.formatted_value.as_deref())
+    }
+    fn get_number(&self) -> Option<f64> {
+        self.data
+            .as_ref()
+            .and_then(|f| f.user_entered_value.as_ref())
+            .and_then(|v| v.number_value)
+    }
+    fn get_integer(&self) -> Option<i64> {
+        self.get_number().map(|v| v.round() as i64)
+    }
+    fn create_content_update(&self, new_value: &str) -> Option<ValueRange> {
+        if self
+            .data
+            .as_ref()
+            .and_then(|data| data.formatted_value.as_ref())
+            .map(|old_value| old_value.as_str() != new_value)
+            .unwrap_or(true)
+        {
+            Some(ValueRange {
+                major_dimension: None,
+                range: Some(format!("{}!{}", self.sheet, self.coordinates)),
+                values: Some(vec![vec![new_value.into()]]),
+            })
+        } else {
+            None
+        }
+    }
+}
+
+impl<'a, const N: usize> GoogleTable<'a, N> {
+    async fn connect(
+        spreadsheet_methods: &'a SpreadsheetMethods<'a, HttpsConnector<HttpConnector>>,
+        column_names: [&'a str; N],
+        document_id: &'a str,
+        sheet_name: &'a str,
+        range: &'a str,
+    ) -> Result<Self, GoogleDataError> {
+        let (_, sheet) = spreadsheet_methods
+            .get(document_id)
+            .add_scope("https://www.googleapis.com/auth/spreadsheets")
+            .include_grid_data(true)
+            .add_ranges(&format!("{}!{}", sheet_name, range))
+            .doit()
+            .await?;
+        let grid = sheet
+            .sheets
+            .into_iter()
+            .flatten()
+            .flat_map(|s| s.data)
+            .flatten()
+            .next()
+            .ok_or(GoogleDataError::NoDataFound)?;
+
+        let start_row = grid.start_row.unwrap_or_default() as usize;
+        let start_column = grid.start_column.unwrap_or_default() as usize;
+        let mut rows: IntoIter<(usize, Vec<CellData>)> = grid
+            .row_data
+            .into_iter()
+            .flatten()
+            .map(|r| r.values)
+            .enumerate()
+            .filter_map(|(idx, r)| r.map(|row| (idx, row)))
+            .collect::<Vec<_>>()
+            .into_iter();
+        let (_, header_row) = rows.next().ok_or(GoogleDataError::EmptyTable)?;
+        let column_indizes = parse_headers(&header_row, column_names).map_err(|error| {
+            GoogleDataError::HeaderNotFound(
+                error,
+                format!("{}!{}", sheet_name, range).into_boxed_str(),
+            )
+        })?;
+
+        Ok(GoogleTable {
+            column_indizes,
+            sheet_name,
+            rows,
+            start_row,
+            start_column,
+        })
+    }
 }
 
 #[derive(Error, Debug)]
