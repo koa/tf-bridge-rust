@@ -1,5 +1,4 @@
 use std::{
-    borrow::Cow,
     collections::{BTreeMap, HashMap, HashSet},
     fmt::{Debug, Display, Formatter, Write},
     io,
@@ -78,14 +77,17 @@ enum LightTemplateTypes {
         cold_temperature: u16,
     },
 }
+
 enum ButtonStyle {
     Single,
     Dual,
 }
+
 struct ButtonTemplateTypes<'a> {
     style: ButtonStyle,
     sub_devices: Box<[&'a str]>,
 }
+
 pub async fn read_sheet_data(state: Option<&State>) -> Result<Option<Wiring>, GoogleDataError> {
     let x = if let Some(config) = &CONFIG.google_sheet {
         let secret = config.read_secret().await?;
@@ -207,7 +209,6 @@ pub async fn read_sheet_data(state: Option<&State>) -> Result<Option<Wiring>, Go
         parse_controllers(
             config,
             &spreadsheet_methods,
-            &sheet,
             state,
             &mut lcd_screens,
             &mut temperature_sensors,
@@ -342,8 +343,8 @@ async fn parse_relays<'a>(
     state: Option<&State>,
     relays: &mut BTreeMap<Uid, RelaySettings>,
     ring_controllers: &mut Vec<RingController>,
-    single_buttons: &HashMap<Cow<'a, str>, SingleButtonKey>,
-    heating_outputs: &HashMap<&str, SwitchOutputKey>,
+    single_buttons: &HashMap<Box<str>, SingleButtonKey>,
+    heating_outputs: &HashMap<Box<str>, SwitchOutputKey>,
 ) -> Result<(), GoogleDataError> {
     let relay_configs = config.relays();
     let mut relay_channels = HashMap::<_, Vec<_>>::new();
@@ -403,25 +404,22 @@ async fn parse_relays<'a>(
                     input: temp_input,
                 });
         } else if let Some(ring_button) = ring_button {
-            device_ids_of_rooms
-                .entry(room)
-                .or_default()
-                .push(RingRowNew {
-                    uid,
-                    channel,
-                    idx,
-                    ring_button,
-                });
+            device_ids_of_rooms.entry(room).or_default().push(RingRow {
+                uid,
+                channel,
+                idx,
+                ring_button,
+            });
         }
         update_state_new(|v| updates.push(v), state, &old_state, uid);
     }
-    struct RingRowNew<'a> {
+    struct RingRow<'a> {
         idx: DeviceIdxCell<'a>,
         ring_button: SingleButtonKey,
         uid: Uid,
         channel: u8,
     }
-    impl<'a> DeviceIdxAccessNew<'a> for RingRowNew<'a> {
+    impl<'a> DeviceIdxAccessNew<'a> for RingRow<'a> {
         fn id_cell<'b>(&'b mut self) -> &'b mut DeviceIdxCell<'a> {
             &mut self.idx
         }
@@ -457,19 +455,17 @@ async fn parse_relays<'a>(
 async fn parse_controllers<'a>(
     config: &GoogleSheet,
     spreadsheet_methods: &SpreadsheetMethods<'_, HttpsConnector<HttpConnector>>,
-    sheet: &'a Spreadsheet,
     state: Option<&State>,
     lcd_screens: &mut BTreeMap<Uid, ScreenSettings>,
     temperature_sensors: &mut BTreeMap<Uid, TemperatureSettings>,
     heat_controllers: &mut Vec<HeatController>,
-    heat_outputs: &mut HashMap<&'a str, SwitchOutputKey>,
-    touchscreen_whitebalances: &mut HashMap<&'a str, LightColorKey>,
-    touchscreen_brightness: &mut HashMap<&'a str, BrightnessKey>,
+    heat_outputs: &mut HashMap<Box<str>, SwitchOutputKey>,
+    touchscreen_whitebalances: &mut HashMap<Box<str>, LightColorKey>,
+    touchscreen_brightness: &mut HashMap<Box<str>, BrightnessKey>,
 ) -> Result<(), GoogleDataError> {
     struct ControllerRow<'a> {
-        room: Room,
-        id: &'a str,
-        idx: Option<u16>,
+        id: Box<str>,
+        idx: DeviceIdxCell<'a>,
         orientation: Orientation,
         touchscreen: Option<Uid>,
         temp_sensor: Option<Uid>,
@@ -477,199 +473,139 @@ async fn parse_controllers<'a>(
         enable_whitebalance_control: bool,
         enable_brighness_control: bool,
     }
-    impl<'a> DeviceIdxAccess for ControllerRow<'a> {
-        fn existing_id(&self) -> Option<u16> {
-            self.idx
-        }
-
-        fn update_id(&mut self, id: u16) {
-            self.idx = Some(id)
+    impl<'a> DeviceIdxAccessNew<'a> for ControllerRow<'a> {
+        fn id_cell<'b>(&'b mut self) -> &'b mut DeviceIdxCell<'a> {
+            &mut self.idx
         }
     }
     let controllers = config.room_controllers();
+    let mut device_ids_of_rooms = HashMap::<_, Vec<_>>::new();
+    let mut updates = Vec::new();
 
-    if let Some(controller_grid) = find_sheet_by_name(sheet, controllers.sheet()) {
-        let (start_row, start_column, mut rows) = get_grid_and_coordinates(controller_grid);
-        if let Some((_, header)) = rows.next() {
-            let [room_column, id_column, index_column, orientation_column, touchscreen_column, temperature_column, heat_control_column, whitebalance_control_column, brightness_control_column, touchscreen_state_column, temperature_state_column] =
-                parse_headers(
-                    header,
-                    [
-                        controllers.room_id(),
-                        controllers.controller_id(),
-                        controllers.controller_idx(),
-                        controllers.orientation(),
-                        controllers.touchscreen_device_address(),
-                        controllers.temperature_device_address(),
-                        controllers.enable_heat_control(),
-                        controllers.enable_whitebalance_control(),
-                        controllers.enable_brightness_control(),
-                        controllers.touchscreen_state(),
-                        controllers.temperature_state(),
-                    ],
-                )
-                .map_err(GoogleDataError::ControllerHeader)?;
-
-            let mut device_ids_of_rooms = HashMap::<_, Vec<_>>::new();
-            let mut updates = Vec::new();
-
-            for (row_idx, row) in rows {
-                if let (
-                    Some(room),
-                    Some(controller_id),
-                    idx,
-                    Some(orientation),
-                    touchscreen,
-                    temp_sensor,
-                    enable_heatcontrol,
-                    enable_whitebalance_control,
-                    enable_brighness_control,
-                    touchscreen_state,
-                    tempareature_state,
-                ) = (
-                    get_cell_content(row, room_column)
-                        .map(Room::from_str)
-                        .and_then(Result::ok),
-                    get_cell_content(row, id_column),
-                    get_cell_integer(row, index_column).map(|v| v as u16),
-                    get_cell_content(row, orientation_column)
-                        .map(|v| Orientation::deserialize(serde_yaml::Value::String(v.to_string())))
-                        .and_then(Result::ok),
-                    get_cell_content(row, touchscreen_column)
-                        .map(Uid::from_str)
-                        .and_then(Result::ok),
-                    get_cell_content(row, temperature_column)
-                        .map(Uid::from_str)
-                        .and_then(Result::ok),
-                    get_cell_content(row, heat_control_column)
-                        .map(|v| !v.is_empty())
-                        .unwrap_or(false),
-                    get_cell_content(row, whitebalance_control_column)
-                        .map(|v| !v.is_empty())
-                        .unwrap_or(false),
-                    get_cell_content(row, brightness_control_column)
-                        .map(|v| !v.is_empty())
-                        .unwrap_or(false),
-                    get_cell_content(row, touchscreen_state_column),
-                    get_cell_content(row, temperature_state_column),
-                ) {
-                    let row = row_idx + start_row;
-                    let col = index_column + start_column;
-                    device_ids_of_rooms.entry(room).or_default().push((
-                        CellCoordinates { row, col },
-                        ControllerRow {
-                            room,
-                            id: controller_id,
-                            idx,
-                            orientation,
-                            touchscreen,
-                            temp_sensor,
-                            enable_heatcontrol,
-                            enable_whitebalance_control,
-                            enable_brighness_control,
-                        },
-                    ));
-                    if let Some(uid) = touchscreen {
-                        update_state(
-                            &mut updates,
-                            controllers.sheet(),
-                            CellCoordinates {
-                                row,
-                                col: touchscreen_state_column + start_column,
-                            },
-                            uid,
-                            state,
-                            touchscreen_state,
-                        );
-                    }
-                    if let Some(uid) = temp_sensor {
-                        update_state(
-                            &mut updates,
-                            controllers.sheet(),
-                            CellCoordinates {
-                                row,
-                                col: temperature_state_column + start_column,
-                            },
-                            uid,
-                            state,
-                            tempareature_state,
-                        );
-                    }
-                }
-            }
-
-            let controller_rows =
-                adjust_device_idx(device_ids_of_rooms, controllers.sheet(), &mut updates).await?;
-            write_updates_to_sheet(config, spreadsheet_methods, updates).await?;
-
-            for row in controller_rows {
-                let device_idx = DeviceInRoom {
-                    room: row.room,
-                    idx: row.idx.unwrap(),
-                };
-                let current_temperature_key = if let Some(uid) = row.temp_sensor {
-                    let output = TemperatureKey::CurrentTemperature(device_idx);
-                    temperature_sensors.insert(uid, TemperatureSettings { output });
-                    Some(output)
-                } else {
-                    None
-                };
-                let adjust_temperature_key = if row.enable_heatcontrol {
-                    if let Some(current_value_input) = current_temperature_key {
-                        let target_value_input = TemperatureKey::TargetTemperature(device_idx);
-                        let output = SwitchOutputKey::Heat(device_idx);
-                        heat_controllers.push(HeatController {
-                            current_value_input,
-                            target_value_input,
-                            output,
-                        });
-                        heat_outputs.insert(row.id, output);
-                        Some(target_value_input)
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                };
-                let light_color_key = if row.enable_whitebalance_control {
-                    let key = LightColorKey::TouchscreenController(device_idx);
-                    touchscreen_whitebalances.insert(row.id, key);
-                    Some(key)
-                } else {
-                    None
-                };
-                let brightness_key = if row.enable_brighness_control {
-                    let key = BrightnessKey::TouchscreenController(device_idx);
-                    touchscreen_brightness.insert(row.id, key);
-                    Some(key)
-                } else {
-                    None
-                };
-                if let Some(uid) = row.touchscreen {
-                    lcd_screens.insert(
-                        uid,
-                        ScreenSettings {
-                            orientation: row.orientation,
-                            clock_key: Some(ClockKey::MinuteClock),
-                            current_temperature_key,
-                            adjust_temperature_key,
-                            light_color_key,
-                            brightness_key,
-                        },
-                    );
-                }
-            }
+    for (room, controller_id, idx, orientation, touchscreen, temp_sensor, enable_heatcontrol, enable_whitebalance_control, enable_brighness_control, touchscreen_state, temperature_state) in GoogleTable::connect(
+        spreadsheet_methods,
+        [
+            controllers.room_id(),
+            controllers.controller_id(),
+            controllers.controller_idx(),
+            controllers.orientation(),
+            controllers.touchscreen_device_address(),
+            controllers.temperature_device_address(),
+            controllers.enable_heat_control(),
+            controllers.enable_whitebalance_control(),
+            controllers.enable_brightness_control(),
+            controllers.touchscreen_state(),
+            controllers.temperature_state(),
+        ],
+        config.spreadsheet_id(),
+        controllers.sheet(),
+        controllers.range(),
+    ).await?.filter_map(|[room, id, idx, orientation, touchscreen, temperature,
+                         heat_control, whitebalance, brightness, touchscreen_state, temperature_state]| {
+        if let (Some(room), Some(controller_id), Some(orientation)) = (room.get_content().map(Room::from_str)
+                                                                           .and_then(Result::ok), id.get_content(), orientation.get_content().map(|v| Orientation::deserialize(serde_yaml::Value::String(v.to_string())))
+                                                                           .and_then(Result::ok)) {
+            Some((room, controller_id.to_string().into_boxed_str(), DeviceIdxCell(idx), orientation,
+                  touchscreen.get_content().map(Uid::from_str).and_then(Result::ok),
+                  temperature.get_content().map(Uid::from_str).and_then(Result::ok),
+                  heat_control.get_content().map(|v| !v.is_empty())
+                      .unwrap_or(false),
+                  whitebalance.get_content().map(|v| !v.is_empty())
+                      .unwrap_or(false),
+                  brightness.get_content().map(|v| !v.is_empty())
+                      .unwrap_or(false),
+                  touchscreen_state, temperature_state
+            ))
+        } else {
+            None
+        }
+    }) {
+        device_ids_of_rooms.entry(room).or_default().push(
+            ControllerRow {
+                id: controller_id,
+                idx,
+                orientation,
+                touchscreen,
+                temp_sensor,
+                enable_heatcontrol,
+                enable_whitebalance_control,
+                enable_brighness_control,
+            },
+        );
+        if let Some(uid) = touchscreen {
+            update_state_new(
+                |s|updates.push(s),state, & touchscreen_state,uid,            );
+        }
+        if let Some(uid)= temp_sensor {
+            update_state_new(|s| updates.push(s),state,&temperature_state,uid)
         }
     }
+    let controller_rows = fill_device_idx(|s| updates.push(s), device_ids_of_rooms);
+    for (device_idx, row) in controller_rows {
+        let current_temperature_key = if let Some(uid) = row.temp_sensor {
+            let output = TemperatureKey::CurrentTemperature(device_idx);
+            temperature_sensors.insert(uid, TemperatureSettings { output });
+            Some(output)
+        } else {
+            None
+        };
+        let adjust_temperature_key = if row.enable_heatcontrol {
+            if let Some(current_value_input) = current_temperature_key {
+                let target_value_input = TemperatureKey::TargetTemperature(device_idx);
+                let output = SwitchOutputKey::Heat(device_idx);
+                heat_controllers.push(HeatController {
+                    current_value_input,
+                    target_value_input,
+                    output,
+                });
+                heat_outputs.insert(row.id.clone(), output);
+                Some(target_value_input)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        let light_color_key = if row.enable_whitebalance_control {
+            let key = LightColorKey::TouchscreenController(device_idx);
+            touchscreen_whitebalances.insert(row.id.clone(), key);
+            Some(key)
+        } else {
+            None
+        };
+        let brightness_key = if row.enable_brighness_control {
+            let key = BrightnessKey::TouchscreenController(device_idx);
+            touchscreen_brightness.insert(row.id, key);
+            Some(key)
+        } else {
+            None
+        };
+        if let Some(uid) = row.touchscreen {
+            lcd_screens.insert(
+                uid,
+                ScreenSettings {
+                    orientation: row.orientation,
+                    clock_key: Some(ClockKey::MinuteClock),
+                    current_temperature_key,
+                    adjust_temperature_key,
+                    light_color_key,
+                    brightness_key,
+                },
+            );
+        }
+    }
+
+    write_updates_to_sheet(config, spreadsheet_methods, updates).await?;
     Ok(())
 }
+
 async fn parse_motion_detectors<'a>(
     config: &GoogleSheet,
     spreadsheet_methods: &SpreadsheetMethods<'_, HttpsConnector<HttpConnector>>,
     sheet: &'a Spreadsheet,
     state: Option<&State>,
     motion_detectors: &mut BTreeMap<Uid, MotionDetectorSettings>,
-    single_button_adresses: &mut HashMap<&'a str, SingleButtonKey>,
+    single_button_adresses: &mut HashMap<Box<str>, SingleButtonKey>,
 ) -> Result<(), GoogleDataError> {
     struct MotionDetectorRow<'a> {
         id: &'a str,
@@ -750,12 +686,13 @@ async fn parse_motion_detectors<'a>(
                     idx: row.idx.unwrap(),
                 });
                 motion_detectors.insert(row.device_address, MotionDetectorSettings { output: key });
-                single_button_adresses.insert(row.id, key);
+                single_button_adresses.insert(row.id.into(), key);
             }
         }
     }
     Ok(())
 }
+
 async fn parse_lights<'a>(
     config: &GoogleSheet,
     spreadsheet_methods: &SpreadsheetMethods<'_, HttpsConnector<HttpConnector>>,
@@ -765,10 +702,10 @@ async fn parse_lights<'a>(
     dual_input_dimmers: &mut Vec<DualInputDimmer>,
     dual_input_switches: &mut Vec<DualInputSwitch>,
     motion_detector_controllers: &mut Vec<MotionDetector>,
-    dual_button_adresses: &mut HashMap<Cow<'a, str>, DualButtonKey>,
-    touchscreen_whitebalances: &mut HashMap<&'a str, LightColorKey>,
-    touchscreen_brightness: &mut HashMap<&'a str, BrightnessKey>,
-    motion_detector_adresses: &mut HashMap<&'a str, SingleButtonKey>,
+    dual_button_adresses: &mut HashMap<Box<str>, DualButtonKey>,
+    touchscreen_whitebalances: &mut HashMap<Box<str>, LightColorKey>,
+    touchscreen_brightness: &mut HashMap<Box<str>, BrightnessKey>,
+    motion_detector_adresses: &mut HashMap<Box<str>, SingleButtonKey>,
 ) -> Result<(), GoogleDataError> {
     let light_templates = config.light_templates();
     let mut light_template_map = HashMap::new();
@@ -855,7 +792,7 @@ async fn parse_lights<'a>(
                         light_config.state()
                     ],
                 )
-                .map_err(GoogleDataError::LightHeader)?;
+                    .map_err(GoogleDataError::LightHeader)?;
             let manual_button_columns = parse_dynamic_headers(
                 header,
                 &light_config
@@ -1092,10 +1029,12 @@ async fn parse_lights<'a>(
     }
     Ok(())
 }
+
 trait DeviceIdxAccess {
     fn existing_id(&self) -> Option<u16>;
     fn update_id(&mut self, id: u16);
 }
+
 trait DeviceIdxAccessNew<'a> {
     fn id_cell<'b>(&'b mut self) -> &'b mut DeviceIdxCell<'a>;
 }
@@ -1188,8 +1127,8 @@ async fn parse_buttons<'a>(
     sheet: &'a Spreadsheet,
     state: Option<&State>,
     io_bricklets: &mut BTreeMap<Uid, Vec<ButtonSetting>>,
-    single_button_adresses: &mut HashMap<Cow<'a, str>, SingleButtonKey>,
-    dual_button_adresses: &mut HashMap<Cow<'a, str>, DualButtonKey>,
+    single_button_adresses: &mut HashMap<Box<str>, SingleButtonKey>,
+    dual_button_adresses: &mut HashMap<Box<str>, DualButtonKey>,
 ) -> Result<(), GoogleDataError> {
     let mut button_template_map = HashMap::new();
 
@@ -1348,8 +1287,7 @@ async fn parse_buttons<'a>(
                 for (subdevice_id, subdevice_name) in
                     button_row.button_template.sub_devices.iter().enumerate()
                 {
-                    let device_key =
-                        Cow::Owned(format!("{}, {}", button_row.button_id, subdevice_name));
+                    let device_key = format!("{}, {}", button_row.button_id, subdevice_name);
 
                     let sub_device_in_room = SubDeviceInRoom {
                         room: button_row.room,
@@ -1363,7 +1301,7 @@ async fn parse_buttons<'a>(
                                 button: current_input_idx,
                                 output,
                             });
-                            single_button_adresses.insert(device_key, output);
+                            single_button_adresses.insert(device_key.into(), output);
                             current_input_idx += 1;
                         }
                         ButtonStyle::Dual => {
@@ -1373,7 +1311,7 @@ async fn parse_buttons<'a>(
                                 down_button: current_input_idx,
                                 output,
                             });
-                            dual_button_adresses.insert(device_key, output);
+                            dual_button_adresses.insert(device_key.into(), output);
                             current_input_idx += 2;
                         }
                     }
@@ -1439,6 +1377,7 @@ fn update_state_new<F: FnMut(ValueRange)>(
         }
     }
 }
+
 fn update_state(
     updates: &mut Vec<ValueRange>,
     sheet_name: &str,
@@ -1500,14 +1439,17 @@ fn find_sheet_by_name<'a>(sheet: &'a Spreadsheet, name_of_sheet: &str) -> Option
 fn get_cell_content(row: &[CellData], idx: usize) -> Option<&str> {
     row.get(idx).and_then(|f| f.formatted_value.as_deref())
 }
+
 fn get_cell_number(row: &[CellData], idx: usize) -> Option<f64> {
     row.get(idx)
         .and_then(|f| f.user_entered_value.as_ref())
         .and_then(|v| v.number_value)
 }
+
 fn get_cell_integer(row: &[CellData], idx: usize) -> Option<i64> {
     get_cell_number(row, idx).map(|v| v.round() as i64)
 }
+
 struct GoogleTable<'a, const N: usize> {
     column_indizes: [usize; N],
     sheet_name: &'a str,
@@ -1534,6 +1476,7 @@ impl<'a, const N: usize> Iterator for GoogleTable<'a, N> {
         })
     }
 }
+
 struct GoogleCellData<'a> {
     data: Option<CellData>,
     sheet: &'a str,
@@ -1576,6 +1519,7 @@ impl GoogleCellData<'_> {
         }
     }
 }
+
 struct DeviceIdxCell<'a>(GoogleCellData<'a>);
 
 impl<'a> DeviceIdxCell<'a> {
@@ -1649,6 +1593,7 @@ impl<'a, const N: usize> GoogleTable<'a, N> {
 #[derive(Error, Debug)]
 #[error("Missing Headers: {0:?}")]
 pub struct HeaderError(Box<[Box<str>]>);
+
 fn parse_headers<const N: usize>(
     row: &[CellData],
     header_columns: [&str; N],
