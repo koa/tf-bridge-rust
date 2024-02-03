@@ -57,8 +57,6 @@ pub enum GoogleDataError {
     ButtonTemplateHeader(HeaderError),
     #[error("Error parsing button header: {0}")]
     ButtonHeader(HeaderError),
-    #[error("Error parsing controller header: {0}")]
-    ControllerHeader(HeaderError),
     #[error("Error parsing motion detector header: {0}")]
     MotionDetectorHeader(HeaderError),
     #[error("No data found in spreadsheet")]
@@ -200,7 +198,6 @@ pub async fn read_sheet_data(state: Option<&State>) -> Result<Option<Wiring>, Go
         parse_motion_detectors(
             config,
             &spreadsheet_methods,
-            &sheet,
             state,
             &mut motion_detector_sensors,
             &mut motion_detector_adresses,
@@ -602,93 +599,70 @@ async fn parse_controllers<'a>(
 async fn parse_motion_detectors<'a>(
     config: &GoogleSheet,
     spreadsheet_methods: &SpreadsheetMethods<'_, HttpsConnector<HttpConnector>>,
-    sheet: &'a Spreadsheet,
     state: Option<&State>,
     motion_detectors: &mut BTreeMap<Uid, MotionDetectorSettings>,
     single_button_adresses: &mut HashMap<Box<str>, SingleButtonKey>,
 ) -> Result<(), GoogleDataError> {
     struct MotionDetectorRow<'a> {
-        id: &'a str,
-        room: Room,
+        id: Box<str>,
         device_address: Uid,
-        idx: Option<u16>,
+        idx: DeviceIdxCell<'a>,
     }
-    impl<'a> DeviceIdxAccess for MotionDetectorRow<'a> {
-        fn existing_id(&self) -> Option<u16> {
-            self.idx
+    impl<'a> DeviceIdxAccessNew<'a> for MotionDetectorRow<'a> {
+        fn id_cell<'b>(&'b mut self) -> &'b mut DeviceIdxCell<'a> {
+            &mut self.idx
         }
+    }
+    let mut updates = Vec::new();
 
-        fn update_id(&mut self, id: u16) {
-            self.idx = Some(id);
-        }
-    }
     let md_config = config.motion_detectors();
-    if let Some(motion_detector_grid) = find_sheet_by_name(sheet, md_config.sheet()) {
-        let (start_row, start_column, mut rows) = get_grid_and_coordinates(motion_detector_grid);
-        if let Some((_, header)) = rows.next() {
-            let [room_column, address_column, id_column, idx_column, state_column] = parse_headers(
-                header,
-                [
-                    md_config.room_id(),
-                    md_config.device_address(),
-                    md_config.id(),
-                    md_config.idx(),
-                    md_config.state(),
-                ],
-            )
-            .map_err(GoogleDataError::MotionDetectorHeader)?;
-            let mut device_ids_of_rooms = HashMap::<_, Vec<_>>::new();
-            let mut updates = Vec::new();
-            for (row_idx, row) in rows {
-                if let (Some(room), Some(device_address), Some(id), idx, old_state) = (
-                    get_cell_content(row, room_column)
-                        .map(Room::from_str)
-                        .and_then(Result::ok),
-                    get_cell_content(row, address_column)
-                        .map(Uid::from_str)
-                        .and_then(Result::ok),
-                    get_cell_content(row, id_column),
-                    get_cell_integer(row, idx_column).map(|v| v as u16),
-                    get_cell_content(row, state_column),
-                ) {
-                    let row = row_idx + start_row;
-                    let col = idx_column + start_column;
-                    device_ids_of_rooms.entry(room).or_default().push((
-                        CellCoordinates { row, col },
-                        MotionDetectorRow {
-                            id,
-                            room,
-                            device_address,
-                            idx,
-                        },
-                    ));
-                    update_state(
-                        &mut updates,
-                        md_config.sheet(),
-                        CellCoordinates {
-                            row,
-                            col: state_column + start_column,
-                        },
-                        device_address,
-                        state,
-                        old_state,
-                    );
-                }
-            }
+    let mut device_ids_of_rooms = HashMap::<_, Vec<_>>::new();
 
-            let motion_detector_rows =
-                adjust_device_idx(device_ids_of_rooms, md_config.sheet(), &mut updates).await?;
-            write_updates_to_sheet(config, spreadsheet_methods, updates).await?;
-
-            for row in motion_detector_rows {
-                let key = SingleButtonKey::MotionDetector(DeviceInRoom {
-                    room: row.room,
-                    idx: row.idx.unwrap(),
-                });
-                motion_detectors.insert(row.device_address, MotionDetectorSettings { output: key });
-                single_button_adresses.insert(row.id.into(), key);
-            }
+    for (room, device_address, id, idx, state_cell) in GoogleTable::connect(
+        spreadsheet_methods,
+        [
+            md_config.room_id(),
+            md_config.device_address(),
+            md_config.id(),
+            md_config.idx(),
+            md_config.state(),
+        ],
+        config.spreadsheet_id(),
+        md_config.sheet(),
+        md_config.range(),
+    )
+    .await?
+    .filter_map(|[room, address, id, idx, state]| {
+        if let (Some(room), Some(address), Some(id)) = (
+            room.get_content().map(Room::from_str).and_then(Result::ok),
+            address
+                .get_content()
+                .map(Uid::from_str)
+                .and_then(Result::ok),
+            id.get_content().map(Into::<Box<str>>::into),
+        ) {
+            Some((room, address, id, DeviceIdxCell(idx), state))
+        } else {
+            None
         }
+    }) {
+        device_ids_of_rooms
+            .entry(room)
+            .or_default()
+            .push(MotionDetectorRow {
+                id,
+                device_address,
+                idx,
+            });
+        update_state_new(|v| updates.push(v), state, &state_cell, device_address);
+    }
+    let motion_detector_rows = fill_device_idx(|v| updates.push(v), device_ids_of_rooms);
+    write_updates_to_sheet(config, spreadsheet_methods, updates).await?;
+
+    for (device_idx, row) in motion_detector_rows {
+        let key = SingleButtonKey::MotionDetector(device_idx);
+        motion_detectors.insert(row.device_address, MotionDetectorSettings { output: key });
+        single_button_adresses.insert(row.id.into(), key);
     }
     Ok(())
 }
