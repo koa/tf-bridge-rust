@@ -14,8 +14,8 @@ use tinkerforge_async::{
     temperature_v2_bricklet::TemperatureV2Bricklet,
 };
 use tokio::sync::mpsc;
-use tokio::{net::ToSocketAddrs, pin, task, time::sleep};
-use tokio_stream::{Stream, StreamExt};
+use tokio::{pin, task, time::sleep};
+use tokio_stream::StreamExt;
 
 use crate::data::state::StateUpdateMessage;
 use crate::terminator::TestamentReceiver;

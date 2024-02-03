@@ -1,7 +1,6 @@
 use core::option::Option;
 use std::net::IpAddr;
 use std::pin::Pin;
-use std::str::FromStr;
 use std::task::{Context, Poll};
 
 use futures::Stream;

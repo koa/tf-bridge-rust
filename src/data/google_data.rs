@@ -4,7 +4,6 @@ use std::{
     fmt::{Debug, Display, Formatter, Write},
     io,
     net::IpAddr,
-    ops::IndexMut,
     str::FromStr,
     time::Duration,
     vec::IntoIter,
@@ -63,10 +62,6 @@ pub enum GoogleDataError {
     ControllerHeader(HeaderError),
     #[error("Error parsing motion detector header: {0}")]
     MotionDetectorHeader(HeaderError),
-    #[error("Error parsing relays header: {0}")]
-    RelayHeader(HeaderError),
-    #[error("Error parsing endpoints header: {0}")]
-    EndpointsHeader(HeaderError),
     #[error("No data found in spreadsheet")]
     NoDataFound,
     #[error("Table contains no header")]
@@ -240,7 +235,6 @@ pub async fn read_sheet_data(state: Option<&State>) -> Result<Option<Wiring>, Go
         parse_relays(
             config,
             &spreadsheet_methods,
-            &sheet,
             state,
             &mut relays,
             &mut ring_controllers,
@@ -307,16 +301,16 @@ async fn parse_endpoints(
     endpoints: &mut Vec<IpAddr>,
 ) -> Result<(), GoogleDataError> {
     let endpoints_config = config.endpoints();
-    let endpoints_table = GoogleTable::connect(
+    let mut updates = Vec::new();
+    for (address, state_cell) in GoogleTable::connect(
         spreadsheet_methods,
         [endpoints_config.address(), endpoints_config.state()],
         config.spreadsheet_id(),
         endpoints_config.sheet(),
         endpoints_config.range(),
     )
-    .await?;
-    let mut updates = Vec::new();
-    for (address, state_cell) in endpoints_table.filter_map(|[address, state]| {
+    .await?
+    .filter_map(|[address, state]| {
         address
             .get_content()
             .map(IpAddr::from_str)
@@ -345,137 +339,110 @@ async fn parse_endpoints(
 async fn parse_relays<'a>(
     config: &'a GoogleSheet,
     spreadsheet_methods: &SpreadsheetMethods<'_, HttpsConnector<HttpConnector>>,
-    sheet: &Spreadsheet,
     state: Option<&State>,
     relays: &mut BTreeMap<Uid, RelaySettings>,
     ring_controllers: &mut Vec<RingController>,
-    single_buttons: &mut HashMap<Cow<'a, str>, SingleButtonKey>,
-    heating_outputs: &mut HashMap<&str, SwitchOutputKey>,
+    single_buttons: &HashMap<Cow<'a, str>, SingleButtonKey>,
+    heating_outputs: &HashMap<&str, SwitchOutputKey>,
 ) -> Result<(), GoogleDataError> {
-    struct RingRow {
-        room: Room,
-        idx: Option<u16>,
+    let relay_configs = config.relays();
+    let mut relay_channels = HashMap::<_, Vec<_>>::new();
+    let mut device_ids_of_rooms = HashMap::<_, Vec<_>>::new();
+    let mut updates = Vec::new();
+
+    for (room, idx, uid, channel, temperature, ring_button, old_state) in GoogleTable::connect(
+        spreadsheet_methods,
+        [
+            relay_configs.room_id(),
+            relay_configs.idx(),
+            relay_configs.device_address(),
+            relay_configs.device_channel(),
+            relay_configs.temperature_sensor(),
+            relay_configs.ring_button(),
+            relay_configs.state(),
+        ],
+        config.spreadsheet_id(),
+        relay_configs.sheet(),
+        relay_configs.range(),
+    )
+    .await?
+    .filter_map(|[room, idx, address, channel, sensor, button, state]| {
+        if let (Some(room), Some(address), Some(channel)) = (
+            room.get_content().map(Room::from_str).and_then(Result::ok),
+            address
+                .get_content()
+                .map(Uid::from_str)
+                .and_then(Result::ok),
+            channel.get_integer().map(|v| v as u8),
+        ) {
+            Some((
+                room,
+                DeviceIdxCell(idx),
+                address,
+                channel,
+                sensor
+                    .get_content()
+                    .and_then(|k| heating_outputs.get(k))
+                    .copied(),
+                button
+                    .get_content()
+                    .and_then(|k| single_buttons.get(k))
+                    .copied(),
+                state,
+            ))
+        } else {
+            None
+        }
+    }) {
+        if let Some(temp_input) = temperature {
+            relay_channels
+                .entry(uid)
+                .or_default()
+                .push(RelayChannelEntry {
+                    channel,
+                    input: temp_input,
+                });
+        } else if let Some(ring_button) = ring_button {
+            device_ids_of_rooms
+                .entry(room)
+                .or_default()
+                .push(RingRowNew {
+                    uid,
+                    channel,
+                    idx,
+                    ring_button,
+                });
+        }
+        update_state_new(|v| updates.push(v), state, &old_state, uid);
+    }
+    struct RingRowNew<'a> {
+        idx: DeviceIdxCell<'a>,
         ring_button: SingleButtonKey,
         uid: Uid,
         channel: u8,
     }
-    impl DeviceIdxAccess for RingRow {
-        fn existing_id(&self) -> Option<u16> {
-            self.idx
-        }
-
-        fn update_id(&mut self, id: u16) {
-            self.idx = Some(id);
+    impl<'a> DeviceIdxAccessNew<'a> for RingRowNew<'a> {
+        fn id_cell<'b>(&'b mut self) -> &'b mut DeviceIdxCell<'a> {
+            &mut self.idx
         }
     }
-    let mut relay_channels = HashMap::<_, Vec<_>>::new();
-    let relay_configs = config.relays();
-    if let Some(relay_grid) = find_sheet_by_name(sheet, relay_configs.sheet()) {
-        let (start_row, start_column, mut rows) = get_grid_and_coordinates(relay_grid);
-        if let Some((_, header)) = rows.next() {
-            let [room_id_column, /*id_column,*/ idx_column, device_address_column, device_channel_column, temperature_column, ring_button_column,state_column] =
-                parse_headers(
-                    header,
-                    [
-                        relay_configs.room_id(),
-                        //relay_configs.id(),
-                        relay_configs.idx(),
-                        relay_configs.device_address(),
-                        relay_configs.device_channel(),
-                        relay_configs.temperature_sensor(),
-                        relay_configs.ring_button(),
-                        relay_configs.state()
-                    ],
-                )
-                .map_err(GoogleDataError::RelayHeader)?;
-            let mut device_ids_of_rooms = HashMap::<_, Vec<_>>::new();
-            let mut updates = Vec::new();
-            for (row_idx, row) in rows {
-                if let (
-                    Some(room),
-                    //Some(id),
-                    idx,
-                    Some(uid),
-                    Some(channel),
-                    temperature,
-                    ring_button,
-                    old_state,
-                ) = (
-                    get_cell_content(row, room_id_column)
-                        .map(Room::from_str)
-                        .and_then(Result::ok),
-                    //get_cell_content(row, id_column),
-                    get_cell_integer(row, idx_column).map(|v| v as u16),
-                    get_cell_content(row, device_address_column)
-                        .map(Uid::from_str)
-                        .and_then(Result::ok),
-                    get_cell_integer(row, device_channel_column).map(|v| v as u8),
-                    get_cell_content(row, temperature_column)
-                        .and_then(|k| heating_outputs.get(k))
-                        .copied(),
-                    get_cell_content(row, ring_button_column)
-                        .and_then(|k| single_buttons.get(k))
-                        .copied(),
-                    get_cell_content(row, state_column),
-                ) {
-                    if let Some(temp_input) = temperature {
-                        relay_channels
-                            .entry(uid)
-                            .or_default()
-                            .push(RelayChannelEntry {
-                                channel,
-                                input: temp_input,
-                            });
-                    } else if let Some(ring_button) = ring_button {
-                        let row = row_idx + start_row;
-                        let col = idx_column + start_column;
-
-                        device_ids_of_rooms.entry(room).or_default().push((
-                            CellCoordinates { row, col },
-                            RingRow {
-                                uid,
-                                channel,
-                                room,
-                                idx,
-                                ring_button,
-                            },
-                        ));
-                    }
-                    update_state(
-                        &mut updates,
-                        relay_configs.sheet(),
-                        CellCoordinates {
-                            row: row_idx + start_row,
-                            col: state_column + start_column,
-                        },
-                        uid,
-                        state,
-                        old_state,
-                    );
-                }
-            }
-            let ring_rows =
-                adjust_device_idx(device_ids_of_rooms, relay_configs.sheet(), &mut updates).await?;
-            write_updates_to_sheet(config, spreadsheet_methods, updates).await?;
-            for row in ring_rows {
-                let index = SwitchOutputKey::Bell(DeviceInRoom {
-                    room: row.room,
-                    idx: row.idx.unwrap(),
-                });
-                ring_controllers.push(RingController {
-                    input: row.ring_button,
-                    output: index,
-                });
-                relay_channels
-                    .entry(row.uid)
-                    .or_default()
-                    .push(RelayChannelEntry {
-                        channel: row.channel,
-                        input: index,
-                    });
-            }
-        }
+    let ring_rows = fill_device_idx(|v| updates.push(v), device_ids_of_rooms);
+    write_updates_to_sheet(config, spreadsheet_methods, updates).await?;
+    for (device, row) in ring_rows {
+        let index = SwitchOutputKey::Bell(device);
+        ring_controllers.push(RingController {
+            input: row.ring_button,
+            output: index,
+        });
+        relay_channels
+            .entry(row.uid)
+            .or_default()
+            .push(RelayChannelEntry {
+                channel: row.channel,
+                input: index,
+            });
     }
+
     for (uid, channels) in relay_channels {
         relays.insert(
             uid,
@@ -1129,6 +1096,47 @@ trait DeviceIdxAccess {
     fn existing_id(&self) -> Option<u16>;
     fn update_id(&mut self, id: u16);
 }
+trait DeviceIdxAccessNew<'a> {
+    fn id_cell<'b>(&'b mut self) -> &'b mut DeviceIdxCell<'a>;
+}
+
+fn fill_device_idx<'a, R: DeviceIdxAccessNew<'a>, F: FnMut(ValueRange)>(
+    mut updater: F,
+    device_ids_of_rooms: HashMap<Room, Vec<R>>,
+) -> Vec<(DeviceInRoom, R)> {
+    let mut device_rows = Vec::new();
+    for (room, devices) in device_ids_of_rooms {
+        let mut occupied_ids = HashSet::new();
+        let mut remaining_devices = Vec::with_capacity(devices.len());
+        for mut row in devices.into_iter() {
+            let option = row
+                .id_cell()
+                .existing_idx()
+                .filter(|id| !occupied_ids.contains(id));
+            if let Some(idx) = option {
+                occupied_ids.insert(idx);
+                device_rows.push((DeviceInRoom { room, idx }, row));
+            } else {
+                remaining_devices.push(row);
+            };
+        }
+        let mut next_id = 0;
+        for mut row in remaining_devices {
+            while occupied_ids.contains(&next_id) {
+                next_id += 1;
+            }
+            let (idx, update) = row.id_cell().get_or_create_idx(&mut || next_id);
+            device_rows.push((DeviceInRoom { room, idx }, row));
+            if let Some(update) = update {
+                updater(update);
+            }
+            next_id += 1;
+        }
+    }
+
+    device_rows
+}
+
 async fn adjust_device_idx<R: DeviceIdxAccess>(
     device_ids_of_rooms: HashMap<Room, Vec<(CellCoordinates, R)>>,
     sheet_name: &str,
@@ -1397,6 +1405,40 @@ async fn write_updates_to_sheet(
     Ok(())
 }
 
+fn update_state_new<F: FnMut(ValueRange)>(
+    mut updater: F,
+    current_state: Option<&State>,
+    state_cell: &GoogleCellData,
+    uid: Uid,
+) {
+    if let Some(current_state) = current_state {
+        let new_text = match current_state.bricklet(&uid) {
+            None => "Not found".to_string(),
+            Some(&BrickletConnectionData {
+                ref state,
+                last_change,
+                endpoint,
+                ref metadata,
+            }) => {
+                let timestamp = DateTime::<Local>::from(last_change);
+                if let Some(BrickletMetadata {
+                    connected_uid,
+                    position,
+                    hardware_version,
+                    firmware_version,
+                }) = metadata
+                {
+                    format!("{state}, {timestamp}, {endpoint}; {connected_uid}, {position}")
+                } else {
+                    format!("{state}, {timestamp}, {endpoint}")
+                }
+            }
+        };
+        if let Some(update) = state_cell.create_content_update(&new_text) {
+            updater(update);
+        }
+    }
+}
 fn update_state(
     updates: &mut Vec<ValueRange>,
     sheet_name: &str,
@@ -1521,14 +1563,33 @@ impl GoogleCellData<'_> {
             .map(|old_value| old_value.as_str() != new_value)
             .unwrap_or(true)
         {
-            Some(ValueRange {
-                major_dimension: None,
-                range: Some(format!("{}!{}", self.sheet, self.coordinates)),
-                values: Some(vec![vec![new_value.into()]]),
-            })
+            Some(self.override_cell(new_value))
         } else {
             None
         }
+    }
+    fn override_cell(&self, value: impl Into<serde_json::Value>) -> ValueRange {
+        ValueRange {
+            major_dimension: None,
+            range: Some(format!("{}!{}", self.sheet, self.coordinates)),
+            values: Some(vec![vec![value.into()]]),
+        }
+    }
+}
+struct DeviceIdxCell<'a>(GoogleCellData<'a>);
+
+impl<'a> DeviceIdxCell<'a> {
+    fn get_or_create_idx<F: FnMut() -> u16>(&self, supplier: &mut F) -> (u16, Option<ValueRange>) {
+        if let Some(old_value) = self.existing_idx() {
+            (old_value, None)
+        } else {
+            let new_value = supplier();
+            (new_value, Some(self.0.override_cell(new_value)))
+        }
+    }
+
+    fn existing_idx(&self) -> Option<u16> {
+        self.0.get_integer().map(|v| v as u16)
     }
 }
 

@@ -1,6 +1,6 @@
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
-use std::fmt::{Display, Formatter, Write};
+use std::fmt::{Display, Formatter};
 use std::net::IpAddr;
 use std::time::SystemTime;
 
@@ -206,7 +206,7 @@ impl State {
                 }
             },
             StateUpdateMessage::EndpointDisconnected(ip) => {
-                if let Some(mut entry) = self.endpoints.get_mut(&ip) {
+                if let Some(entry) = self.endpoints.get_mut(&ip) {
                     if entry.state != ConnectionState::Disconnected {
                         entry.state = ConnectionState::Disconnected;
                         entry.last_change = SystemTime::now();
@@ -238,7 +238,7 @@ impl State {
                 }
             },
             StateUpdateMessage::BrickletDisconnected { uid, endpoint } => {
-                if let Some(mut entry_data) = self.bricklets.get_mut(&uid) {
+                if let Some(entry_data) = self.bricklets.get_mut(&uid) {
                     if entry_data.state != ConnectionState::Disconnected
                         && entry_data.endpoint == endpoint
                     {

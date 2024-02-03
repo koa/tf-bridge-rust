@@ -25,7 +25,7 @@ impl Drop for DeviceThreadTerminator {
     }
 }*/
 
-pub struct TestamentSender(Option<(watch::Sender<Option<()>>)>);
+pub struct TestamentSender(Option<watch::Sender<Option<()>>>);
 #[derive(Clone)]
 pub struct TestamentReceiver(watch::Receiver<Option<()>>);
 
