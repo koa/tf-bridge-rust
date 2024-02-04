@@ -144,7 +144,7 @@ async fn config_update_loop(
             MainLoopEvent::StatusUpdateMessage(update) => {
                 state_received = true;
                 known_state.process_msg(update);
-                fech_next_in(main_tx.clone(), &mut config_timer, Duration::from_secs(2));
+                fech_next_in(main_tx.clone(), &mut config_timer, Duration::from_secs(15));
             }
             MainLoopEvent::FetchConfig => {
                 let wiring = fetch_config(
