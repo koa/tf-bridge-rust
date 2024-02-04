@@ -2452,9 +2452,9 @@ dependencies = [
 
 [[package]]
 name = "tinkerforge-async"
-version = "0.0.4"
+version = "0.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ed45c90e69c524d476f540384e6a1f5c90e922a4d630c3d7fdb822e7a58a40ed"
+checksum = "356db8a7ef294d1bcec82d5652e546356519192235acbd96cf00d03ebf78aa69"
 dependencies = [
  "byteorder",
  "const-str",

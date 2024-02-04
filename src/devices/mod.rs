@@ -14,14 +14,13 @@ use tinkerforge_async::{
     motion_detector_v2_bricklet::MotionDetectorV2Bricklet,
     temperature_v2_bricklet::TemperatureV2Bricklet,
 };
-use tokio::{pin, sync::mpsc, task, time::sleep};
-use tokio_stream::StreamExt;
+use tokio::{pin, sync::mpsc, task, time::interval, time::sleep};
+use tokio_stream::{wrappers::IntervalStream, StreamExt};
 
-use crate::data::state::BrickletMetadata;
 use crate::{
     data::{
-        registry::EventRegistry, settings::Tinkerforge, state::StateUpdateMessage,
-        wiring::TinkerforgeDevices, Uid,
+        registry::EventRegistry, settings::Tinkerforge, state::BrickletMetadata,
+        state::StateUpdateMessage, wiring::TinkerforgeDevices, Uid,
     },
     devices::{
         dmx_handler::handle_dmx,
@@ -98,10 +97,11 @@ pub fn activate_devices(
 enum EnumerationListenerEvent {
     Packet(EnumerateResponse),
     Terminate,
+    Ping,
 }
 #[derive(Error, Debug)]
 enum TfBridgeError {
-    #[error("Error communicating to device")]
+    #[error("Error communicating to device: {0}")]
     TinkerforgeError(#[from] TinkerforgeError),
     #[error("Connection to endpoint lost")]
     ConnectionLost,
@@ -118,20 +118,27 @@ async fn run_enumeration_listener(
 ) -> Result<(), TfBridgeError> {
     let mut registered_devices: HashMap<Uid, TestamentSender> = HashMap::new();
 
-    let ipcon = AsyncIpConnection::new(addr.clone()).await?;
+    let mut ipcon = AsyncIpConnection::new(addr).await?;
     // Enumerate
     let enumeration_stream = ipcon.clone().enumerate().await?;
     pin!(enumeration_stream);
     let mut stream = enumeration_stream
         .as_mut()
         .map(EnumerationListenerEvent::Packet)
-        .chain(termination.send_on_terminate(EnumerationListenerEvent::Terminate));
+        .merge(termination.send_on_terminate(EnumerationListenerEvent::Terminate))
+        .merge(
+            IntervalStream::new(interval(Duration::from_secs(10)))
+                .map(|_| EnumerationListenerEvent::Ping),
+        );
     status_updater
         .send(StateUpdateMessage::EndpointConnected(addr.0))
         .await?;
     let mut device_testaments = HashMap::new();
     while let Some(event) = stream.next().await {
         match event {
+            EnumerationListenerEvent::Ping => {
+                ipcon.disconnect_probe().await?;
+            }
             EnumerationListenerEvent::Packet(paket) => {
                 match paket.uid.base58_to_u32().map(Into::<Uid>::into) {
                     Ok(uid) => match paket.enumeration_type {
@@ -332,6 +339,7 @@ async fn run_enumeration_listener(
     }
     Err(TfBridgeError::ConnectionLost)
 }
+
 fn start_enumeration_listener(
     connection: (IpAddr, u16),
     event_registry: EventRegistry,
@@ -342,6 +350,7 @@ fn start_enumeration_listener(
     task::spawn(async move {
         let socket_str = format!("{connection:?}");
         loop {
+            info!("Connect to {socket_str}");
             match run_enumeration_listener(
                 connection,
                 event_registry.clone(),
