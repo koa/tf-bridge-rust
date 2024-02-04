@@ -1136,7 +1136,7 @@ fn update_state_new<F: FnMut(ValueRange)>(
                     firmware_version,
                 }) = metadata
                 {
-                    format!("{state}, {timestamp}, {endpoint}; {connected_uid}, {position}")
+                    format!("{state}, {timestamp}, {endpoint}; {connected_uid}, {position}, hw: {}, fw: {}",TinkerforgeVersion(hardware_version),TinkerforgeVersion(firmware_version))
                 } else {
                     format!("{state}, {timestamp}, {endpoint}")
                 }
@@ -1145,6 +1145,13 @@ fn update_state_new<F: FnMut(ValueRange)>(
         if let Some(update) = state_cell.create_content_update(&new_text) {
             updater(update);
         }
+    }
+}
+struct TinkerforgeVersion<'a>(&'a [u8; 3]);
+
+impl<'a> Display for TinkerforgeVersion<'a> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}.{}.{}", self.0[0], self.0[1], self.0[2])
     }
 }
 
