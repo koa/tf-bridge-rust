@@ -1,35 +1,24 @@
 use log::info;
-use tokio::sync::watch;
-use tokio::task::{AbortHandle, JoinHandle};
-use tokio_stream::wrappers::WatchStream;
-use tokio_stream::{Stream, StreamExt};
-
-/*
-pub struct DeviceThreadTerminator(Option<mpsc::Sender<()>>);
-
-impl DeviceThreadTerminator {
-    pub fn new(sender: mpsc::Sender<()>) -> Self {
-        Self(Some(sender))
-    }
-}
-
-impl Drop for DeviceThreadTerminator {
-    fn drop(&mut self) {
-        if let Some(sender) = self.0.take() {
-            tokio::spawn(async move {
-                if let Err(error) = sender.send(()).await {
-                    info!("Error on cleanup: {error}, ignoring")
-                }
-            });
-        }
-    }
-}*/
+use tokio::{
+    sync::{mpsc, watch},
+    task::{AbortHandle, JoinHandle},
+};
+use tokio_stream::{wrappers::WatchStream, Stream, StreamExt};
 
 pub struct TestamentSender(Option<watch::Sender<Option<()>>>);
 #[derive(Clone)]
 pub struct TestamentReceiver(watch::Receiver<Option<()>>);
 
 impl TestamentReceiver {
+    pub fn update_on_terminate<R: Send + 'static>(mut self, message: R, sender: mpsc::Sender<R>) {
+        tokio::spawn(async move {
+            self.0
+                .wait_for(|o| o.is_some())
+                .await
+                .expect("Cannot wait for terminate");
+            sender.send(message).await.expect("Cannot send termination");
+        });
+    }
     pub fn send_on_terminate<R>(self, value: R) -> impl Stream<Item = R> + Unpin {
         let mut value = Some(value);
         WatchStream::new(self.0)

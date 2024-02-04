@@ -1,40 +1,40 @@
 use core::option::Option;
-use std::net::IpAddr;
-use std::pin::Pin;
-use std::task::{Context, Poll};
+use std::{
+    pin::Pin,
+    task::{Context, Poll},
+};
 
 use futures::Stream;
 use log::{error, info};
 use thiserror::Error;
-use tinkerforge_async::base58::Base58Error;
-use tinkerforge_async::io16_v2_bricklet::IO16_V2_BRICKLET_STATUS_LED_CONFIG_OFF;
 use tinkerforge_async::{
+    base58::Base58Error,
     error::TinkerforgeError,
     io16_bricklet::{InterruptEvent, Io16Bricklet},
-    io16_v2_bricklet::Io16V2Bricklet,
+    io16_v2_bricklet::{Io16V2Bricklet, IO16_V2_BRICKLET_STATUS_LED_CONFIG_OFF},
 };
 use tokio::{sync::mpsc, task::JoinHandle, time::sleep};
 use tokio_stream::{empty, wrappers::ReceiverStream, StreamExt};
 use tokio_util::either::Either;
 
-use crate::data::state::StateUpdateMessage;
-use crate::data::{
-    registry::{ButtonState, DualButtonLayout, EventRegistry, SingleButtonLayout},
-    wiring::ButtonSetting,
+use crate::{
+    data::{
+        registry::{ButtonState, DualButtonLayout, EventRegistry, SingleButtonLayout},
+        state::StateUpdateMessage,
+        wiring::ButtonSetting,
+    },
+    terminator::{TestamentReceiver, TestamentSender},
 };
-use crate::terminator::{TestamentReceiver, TestamentSender};
 
 pub async fn handle_io16(
     bricklet: Io16Bricklet,
     event_registry: EventRegistry,
     buttons: &[ButtonSetting],
-    status_updater: mpsc::Sender<StateUpdateMessage>,
-    ip_addr: IpAddr,
 ) -> TestamentSender {
     let (tx, rx) = TestamentSender::create();
     let channel_settings = collect_16_channel_settings(event_registry, buttons).await;
     tokio::spawn(async move {
-        let result = io_16_v1_loop(bricklet, rx, channel_settings, status_updater, ip_addr).await;
+        let result = io_16_v1_loop(bricklet, rx, channel_settings).await;
         match result {
             Err(error) => {
                 error!("Cannot communicate with Io16V2Bricklet: {error}");
@@ -131,15 +131,10 @@ async fn io_16_v1_loop(
     mut bricklet: Io16Bricklet,
     rx: TestamentReceiver,
     channel_settings: [ChannelSetting; 16],
-    status_updater: mpsc::Sender<StateUpdateMessage>,
-    ip_addr: IpAddr,
 ) -> Result<(), IoHandlerError> {
     bricklet.set_debounce_period(30).await?;
     bricklet.set_port_interrupt('a', 0xff).await?;
     bricklet.set_port_interrupt('b', 0xff).await?;
-    let id = bricklet.get_identity().await?;
-    let uid = id.uid.parse()?;
-    status_updater.send((ip_addr, id).try_into()?).await?;
     let button_event_stream = futures::StreamExt::flat_map(
         bricklet.get_interrupt_callback_receiver().await,
         move |InterruptEvent {
@@ -162,19 +157,7 @@ async fn io_16_v1_loop(
             }
         },
     );
-    io_16_loop(
-        rx,
-        channel_settings,
-        button_event_stream,
-        status_updater.clone(),
-    )
-    .await?;
-    status_updater
-        .send(StateUpdateMessage::BrickletDisconnected {
-            uid,
-            endpoint: ip_addr,
-        })
-        .await?;
+    io_16_loop(rx, channel_settings, button_event_stream).await?;
     Ok(())
 }
 
@@ -182,13 +165,11 @@ pub async fn handle_io16_v2(
     bricklet: Io16V2Bricklet,
     event_registry: EventRegistry,
     buttons: &[ButtonSetting],
-    status_updater: mpsc::Sender<StateUpdateMessage>,
-    ip_addr: IpAddr,
 ) -> TestamentSender {
     let (tx, rx) = TestamentSender::create();
     let channel_settings = collect_16_channel_settings(event_registry, buttons).await;
     tokio::spawn(async move {
-        match io_16_v2_loop(bricklet, rx, channel_settings, status_updater, ip_addr).await {
+        match io_16_v2_loop(bricklet, rx, channel_settings).await {
             Err(error) => {
                 error!("Cannot communicate with Io16V2Bricklet: {error}");
             }
@@ -220,8 +201,6 @@ async fn io_16_v2_loop(
     mut bricklet: Io16V2Bricklet,
     termination_receiver: TestamentReceiver,
     channel_settings: [ChannelSetting; 16],
-    status_updater: mpsc::Sender<StateUpdateMessage>,
-    ip_addr: IpAddr,
 ) -> Result<(), IoHandlerError> {
     for i in 0..16 {
         bricklet
@@ -241,22 +220,7 @@ async fn io_16_v2_loop(
     bricklet
         .set_status_led_config(IO16_V2_BRICKLET_STATUS_LED_CONFIG_OFF)
         .await?;
-    let identity = bricklet.get_identity().await?;
-    let uid = identity.uid.parse()?;
-    status_updater.send((ip_addr, identity).try_into()?).await?;
-    io_16_loop(
-        termination_receiver,
-        channel_settings,
-        button_event_stream,
-        status_updater.clone(),
-    )
-    .await?;
-    status_updater
-        .send(StateUpdateMessage::BrickletDisconnected {
-            uid,
-            endpoint: ip_addr,
-        })
-        .await?;
+    io_16_loop(termination_receiver, channel_settings, button_event_stream).await?;
     Ok(())
 }
 
@@ -264,7 +228,6 @@ async fn io_16_loop(
     termination_receiver: TestamentReceiver,
     channel_settings: [ChannelSetting; 16],
     button_event_stream: impl Stream<Item = IoMessage> + Sized + Unpin,
-    status_updater: mpsc::Sender<StateUpdateMessage>,
 ) -> Result<(), IoHandlerError> {
     let (rx, tx) = mpsc::channel(2);
     let mut channel_timer: [Option<JoinHandle<()>>; 16] = <[Option<JoinHandle<()>>; 16]>::default();

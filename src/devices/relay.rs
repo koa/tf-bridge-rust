@@ -1,11 +1,9 @@
-use std::net::IpAddr;
-
 use futures::{stream::SelectAll, Stream};
 use log::error;
 use thiserror::Error;
-use tinkerforge_async::base58::Base58Error;
 use tinkerforge_async::{
-    error::TinkerforgeError, industrial_quad_relay_v2_bricklet::IndustrialQuadRelayV2Bricklet,
+    base58::Base58Error, error::TinkerforgeError,
+    industrial_quad_relay_v2_bricklet::IndustrialQuadRelayV2Bricklet,
 };
 use tokio::{
     sync::mpsc::{self, Sender},
@@ -14,17 +12,15 @@ use tokio::{
 };
 use tokio_stream::{wrappers::ReceiverStream, StreamExt};
 
-use crate::data::state::StateUpdateMessage;
-use crate::data::{registry::EventRegistry, wiring::RelayChannelEntry, Uid};
-use crate::terminator::TestamentSender;
+use crate::{
+    data::{registry::EventRegistry, state::StateUpdateMessage, wiring::RelayChannelEntry},
+    terminator::TestamentSender,
+};
 
 pub async fn handle_quad_relay(
     bricklet: IndustrialQuadRelayV2Bricklet,
     event_registry: &EventRegistry,
     inputs: &[RelayChannelEntry],
-    uid: Uid,
-    status_updater: mpsc::Sender<StateUpdateMessage>,
-    ip_addr: IpAddr,
 ) -> TestamentSender {
     let (tx, rx) = TestamentSender::create();
     let mut streams = SelectAll::new();
@@ -39,18 +35,9 @@ pub async fn handle_quad_relay(
     }
     let input_streams = streams.merge(rx.send_on_terminate(RelayMsg::Closed));
     tokio::spawn(async move {
-        if let Err(error) =
-            quad_relay_task(bricklet, input_streams, status_updater.clone(), ip_addr).await
-        {
+        if let Err(error) = quad_relay_task(bricklet, input_streams).await {
             error!("Error processing relay: {error}");
         }
-        status_updater
-            .send(StateUpdateMessage::BrickletDisconnected {
-                uid,
-                endpoint: ip_addr,
-            })
-            .await
-            .expect("Cannot send disconnect message");
     });
     tx
 }
@@ -71,12 +58,8 @@ enum RelayError {
 async fn quad_relay_task(
     mut bricklet: IndustrialQuadRelayV2Bricklet,
     input_stream: impl Stream<Item = RelayMsg> + Unpin,
-    status_updater: mpsc::Sender<StateUpdateMessage>,
-    ip_addr: IpAddr,
 ) -> Result<(), RelayError> {
     let (tx, rx) = mpsc::channel(2);
-    let id = bricklet.get_identity().await?;
-    status_updater.send((ip_addr, id).try_into()?).await?;
     let mut stream = input_stream.merge(ReceiverStream::new(rx));
     let mut current_value = [false; 4];
     let mut timer_handle = Some(start_send_timer(&tx));

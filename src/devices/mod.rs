@@ -1,26 +1,28 @@
-use std::net::IpAddr;
-use std::{collections::HashMap, fmt::Debug, sync::Arc, time::Duration};
+use std::{collections::HashMap, fmt::Debug, net::IpAddr, sync::Arc, time::Duration};
 
 use log::{error, info};
 use thiserror::Error;
-use tinkerforge_async::error::TinkerforgeError;
-use tinkerforge_async::ip_connection::EnumerateResponse;
 use tinkerforge_async::{
-    base58::Base58, dmx_bricklet::DmxBricklet,
-    industrial_quad_relay_v2_bricklet::IndustrialQuadRelayV2Bricklet, io16_bricklet::Io16Bricklet,
-    io16_v2_bricklet::Io16V2Bricklet, ip_connection::async_io::AsyncIpConnection,
-    ip_connection::EnumerationType, lcd_128x64_bricklet::Lcd128x64Bricklet,
+    base58::Base58,
+    dmx_bricklet::DmxBricklet,
+    error::TinkerforgeError,
+    industrial_quad_relay_v2_bricklet::IndustrialQuadRelayV2Bricklet,
+    io16_bricklet::Io16Bricklet,
+    io16_v2_bricklet::Io16V2Bricklet,
+    ip_connection::{async_io::AsyncIpConnection, EnumerateResponse, EnumerationType},
+    lcd_128x64_bricklet::Lcd128x64Bricklet,
     motion_detector_v2_bricklet::MotionDetectorV2Bricklet,
     temperature_v2_bricklet::TemperatureV2Bricklet,
 };
-use tokio::sync::mpsc;
-use tokio::{pin, task, time::sleep};
+use tokio::{pin, sync::mpsc, task, time::sleep};
 use tokio_stream::StreamExt;
 
-use crate::data::state::StateUpdateMessage;
-use crate::terminator::TestamentReceiver;
+use crate::data::state::BrickletMetadata;
 use crate::{
-    data::{registry::EventRegistry, settings::Tinkerforge, wiring::TinkerforgeDevices, Uid},
+    data::{
+        registry::EventRegistry, settings::Tinkerforge, state::StateUpdateMessage,
+        wiring::TinkerforgeDevices, Uid,
+    },
     devices::{
         dmx_handler::handle_dmx,
         io_handler::{handle_io16, handle_io16_v2},
@@ -30,7 +32,7 @@ use crate::{
         temperature::handle_temperature,
     },
     register_handle,
-    terminator::TestamentSender,
+    terminator::{TestamentReceiver, TestamentSender},
 };
 
 pub mod display;
@@ -114,9 +116,6 @@ async fn run_enumeration_listener(
     termination: TestamentReceiver,
     status_updater: mpsc::Sender<StateUpdateMessage>,
 ) -> Result<(), TfBridgeError> {
-    status_updater
-        .send(StateUpdateMessage::EndpointConnected(addr.0))
-        .await?;
     let mut registered_devices: HashMap<Uid, TestamentSender> = HashMap::new();
 
     let ipcon = AsyncIpConnection::new(addr.clone()).await?;
@@ -127,12 +126,43 @@ async fn run_enumeration_listener(
         .as_mut()
         .map(EnumerationListenerEvent::Packet)
         .chain(termination.send_on_terminate(EnumerationListenerEvent::Terminate));
+    status_updater
+        .send(StateUpdateMessage::EndpointConnected(addr.0))
+        .await?;
+    let mut device_testaments = HashMap::new();
     while let Some(event) = stream.next().await {
         match event {
             EnumerationListenerEvent::Packet(paket) => {
                 match paket.uid.base58_to_u32().map(Into::<Uid>::into) {
                     Ok(uid) => match paket.enumeration_type {
                         EnumerationType::Available | EnumerationType::Connected => {
+                            if let Ok(connected_uid) =
+                                paket.connected_uid.base58_to_u32().map(Into::<Uid>::into)
+                            {
+                                let (testament, testament_stream) = TestamentSender::create();
+                                testament_stream.update_on_terminate(
+                                    StateUpdateMessage::BrickletDisconnected {
+                                        uid,
+                                        endpoint: addr.0,
+                                    },
+                                    status_updater.clone(),
+                                );
+                                device_testaments.insert(uid, testament);
+                                status_updater
+                                    .send(StateUpdateMessage::BrickletConnected {
+                                        uid,
+                                        endpoint: addr.0,
+                                        metadata: BrickletMetadata {
+                                            connected_uid,
+                                            position: paket.position,
+                                            hardware_version: paket.hardware_version,
+                                            firmware_version: paket.firmware_version,
+                                        },
+                                    })
+                                    .await
+                                    .expect("Cannot send connection message");
+                            }
+
                             match paket.device_identifier {
                                 Lcd128x64Bricklet::DEVICE_IDENTIFIER => {
                                     if let Some(screen_settings) =
@@ -145,9 +175,6 @@ async fn run_enumeration_listener(
                                                 Lcd128x64Bricklet::new(uid.into(), ipcon.clone()),
                                                 event_registry.clone(),
                                                 *screen_settings,
-                                                uid,
-                                                status_updater.clone(),
-                                                addr.0,
                                             )
                                             .await,
                                         )
@@ -175,9 +202,6 @@ async fn run_enumeration_listener(
                                                 DmxBricklet::new(uid.into(), ipcon.clone()),
                                                 event_registry.clone(),
                                                 &settings.entries,
-                                                uid,
-                                                status_updater.clone(),
-                                                addr.0,
                                             )
                                             .await,
                                         )
@@ -197,8 +221,6 @@ async fn run_enumeration_listener(
                                                 Io16Bricklet::new(uid.into(), ipcon.clone()),
                                                 event_registry.clone(),
                                                 &settings.entries,
-                                                status_updater.clone(),
-                                                addr.0,
                                             )
                                             .await,
                                         )
@@ -218,8 +240,6 @@ async fn run_enumeration_listener(
                                                 Io16V2Bricklet::new(uid.into(), ipcon.clone()),
                                                 event_registry.clone(),
                                                 &settings.entries,
-                                                status_updater.clone(),
-                                                addr.0,
                                             )
                                             .await,
                                         )
@@ -242,9 +262,6 @@ async fn run_enumeration_listener(
                                                 ),
                                                 event_registry.clone(),
                                                 settings.output,
-                                                uid,
-                                                status_updater.clone(),
-                                                addr.0,
                                             ),
                                         )
                                         .await;
@@ -266,9 +283,6 @@ async fn run_enumeration_listener(
                                                 ),
                                                 event_registry.clone(),
                                                 settings.output,
-                                                uid,
-                                                status_updater.clone(),
-                                                addr.0,
                                             ),
                                         )
                                         .await;
@@ -288,9 +302,6 @@ async fn run_enumeration_listener(
                                                 ),
                                                 &event_registry,
                                                 &settings.entries,
-                                                uid,
-                                                status_updater.clone(),
-                                                addr.0,
                                             )
                                             .await,
                                         )
@@ -304,7 +315,8 @@ async fn run_enumeration_listener(
                             }
                         }
                         EnumerationType::Disconnected => {
-                            info!("Disconnected device: {}", paket.uid);
+                            info!("Disconnected device: {}", uid);
+                            device_testaments.remove(&uid);
                         }
                         EnumerationType::Unknown => {
                             info!("Unknown Event: {:?}", paket);

@@ -166,8 +166,8 @@ pub async fn read_sheet_data(state: Option<&State>) -> Result<Option<Wiring>, Go
             state,
             &mut relays,
             &mut ring_controllers,
-            &mut single_button_adresses,
-            &mut heat_outputs_addresses,
+            &single_button_adresses,
+            &heat_outputs_addresses,
         )
         .await?;
         dual_input_dimmers.sort();
@@ -597,7 +597,7 @@ async fn parse_motion_detectors<'a>(
     for (device_idx, row) in motion_detector_rows {
         let key = SingleButtonKey::MotionDetector(device_idx);
         motion_detectors.insert(row.device_address, MotionDetectorSettings { output: key });
-        single_button_adresses.insert(row.id.into(), key);
+        single_button_adresses.insert(row.id, key);
     }
     Ok(())
 }
@@ -732,18 +732,18 @@ async fn parse_lights<'a>(
                 .iter()
                 .filter_map(|cell| GoogleCellData::get_content(cell))
                 .filter(|s| !s.is_empty())
-                .map(|s| s.into())
+                .map(<&str>::into)
                 .collect::<Vec<_>>()
                 .into_boxed_slice(),
             presence_detectors
                 .iter()
                 .filter_map(|cell| cell.get_content())
                 .filter(|s| !s.is_empty())
-                .map(|s| s.into())
+                .map(<&str>::into)
                 .collect::<Vec<_>>()
                 .into_boxed_slice(),
-            whitebalance.get_content().map(|s| s.into()),
-            brightness.get_content().map(|s| s.into()),
+            whitebalance.get_content().map(<&str>::into),
+            brightness.get_content().map(<&str>::into),
             old_state,
         ) {
             device_ids_of_rooms
@@ -960,13 +960,13 @@ async fn parse_buttons<'a>(
     .await?
     {
         if let (Some(name), Some(sub_devices), Some(discriminator)) = (
-            name.get_content().map(|v| v.into()),
+            name.get_content().map(<&str>::into),
             sub_device.get_content(),
             discriminator.get_content(),
         ) {
             let sub_devices = sub_devices
                 .split(',')
-                .map(|v| v.into())
+                .map(<&str>::into)
                 .collect::<Vec<_>>()
                 .into_boxed_slice();
             if let Some(style) = if discriminator == "Single" {
@@ -1026,7 +1026,7 @@ async fn parse_buttons<'a>(
             state_data,
         ) = (
             room.get_content().map(Room::from_str).and_then(Result::ok),
-            button.get_content().map(|s| s.into()),
+            button.get_content().map(<&str>::into),
             DeviceIdxCell(button_idx),
             button_type
                 .get_content()
