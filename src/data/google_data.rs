@@ -11,9 +11,7 @@ use std::{
 
 use chrono::{DateTime, Local};
 use google_sheets4::{
-    api::{
-        BatchUpdateValuesRequest, CellData, GridData, Spreadsheet, SpreadsheetMethods, ValueRange,
-    },
+    api::{BatchUpdateValuesRequest, CellData, SpreadsheetMethods, ValueRange},
     hyper::{client::HttpConnector, Client},
     hyper_rustls::{self, HttpsConnector},
     oauth2::{authenticator::Authenticator, ServiceAccountAuthenticator},
@@ -29,7 +27,7 @@ use crate::{
             BrightnessKey, ClockKey, DualButtonKey, LightColorKey, SingleButtonKey,
             SwitchOutputKey, TemperatureKey,
         },
-        settings::{GoogleButtonData, GoogleButtonTemplate, GoogleError, GoogleSheet, CONFIG},
+        settings::{GoogleError, GoogleSheet, CONFIG},
         state::{BrickletConnectionData, BrickletMetadata, State},
         wiring::{
             ButtonSetting, Controllers, DmxConfigEntry, DmxSettings, DualInputDimmer,
@@ -50,16 +48,6 @@ pub enum GoogleDataError {
     Google(#[from] GoogleError),
     #[error("Error from google sheet api: {0}")]
     Sheet(#[from] google_sheets4::Error),
-    #[error("Error parsing light template header: {0}")]
-    LightTemplateHeader(HeaderError),
-    #[error("Error parsing light header: {0}")]
-    LightHeader(HeaderError),
-    #[error("Error parsing button template header: {0}")]
-    ButtonTemplateHeader(HeaderError),
-    #[error("Error parsing button header: {0}")]
-    ButtonHeader(HeaderError),
-    #[error("Error parsing motion detector header: {0}")]
-    MotionDetectorHeader(HeaderError),
     #[error("No data found in spreadsheet")]
     NoDataFound,
     #[error("Table contains no header")]
@@ -82,9 +70,9 @@ enum ButtonStyle {
     Dual,
 }
 
-struct ButtonTemplateTypes<'a> {
+struct ButtonTemplateTypes {
     style: ButtonStyle,
-    sub_devices: Box<[&'a str]>,
+    sub_devices: Box<[Box<str>]>,
 }
 
 pub async fn read_sheet_data(state: Option<&State>) -> Result<Option<Wiring>, GoogleDataError> {
@@ -106,62 +94,7 @@ pub async fn read_sheet_data(state: Option<&State>) -> Result<Option<Wiring>, Go
 
         let hub = Sheets::new(client, auth);
 
-        let endpoints_config = config.endpoints();
-        let light_template_config = config.light_templates();
-        let light_config = config.light();
-        let button_template_config = config.button_templates();
-        let button_config = config.buttons();
-        let room_controller_config = config.room_controllers();
-        let motion_detector_config = config.motion_detectors();
-        let relays_config = config.relays();
-
         let spreadsheet_methods = hub.spreadsheets();
-        let (_, sheet) = spreadsheet_methods
-            .get(config.spreadsheet_id())
-            .add_scope("https://www.googleapis.com/auth/spreadsheets")
-            .include_grid_data(true)
-            .add_ranges(&format!(
-                "{}!{}",
-                endpoints_config.sheet(),
-                endpoints_config.range()
-            ))
-            .add_ranges(&format!(
-                "{}!{}",
-                room_controller_config.sheet(),
-                room_controller_config.range()
-            ))
-            .add_ranges(&format!(
-                "{}!{}",
-                motion_detector_config.sheet(),
-                motion_detector_config.range()
-            ))
-            .add_ranges(&format!(
-                "{}!{}",
-                light_config.sheet(),
-                light_config.range()
-            ))
-            .add_ranges(&format!(
-                "{}!{}",
-                light_template_config.sheet(),
-                light_template_config.range()
-            ))
-            .add_ranges(&format!(
-                "{}!{}",
-                button_config.sheet(),
-                button_config.range()
-            ))
-            .add_ranges(&format!(
-                "{}!{}",
-                button_template_config.sheet(),
-                button_template_config.range()
-            ))
-            .add_ranges(&format!(
-                "{}!{}",
-                relays_config.sheet(),
-                relays_config.range()
-            ))
-            .doit()
-            .await?;
         let mut io_bricklets = BTreeMap::<_, Vec<_>>::new();
         let mut dmx_bricklets = BTreeMap::<_, Vec<_>>::new();
         let mut lcd_screens = BTreeMap::new();
@@ -186,10 +119,7 @@ pub async fn read_sheet_data(state: Option<&State>) -> Result<Option<Wiring>, Go
         parse_endpoints(config, &spreadsheet_methods, state, &mut endpoints).await?;
         parse_buttons(
             config,
-            button_template_config,
-            button_config,
             &spreadsheet_methods,
-            &sheet,
             state,
             &mut io_bricklets,
             &mut single_button_adresses,
@@ -964,11 +894,6 @@ async fn parse_lights<'a>(
     Ok(())
 }
 
-trait DeviceIdxAccess {
-    fn existing_id(&self) -> Option<u16>;
-    fn update_id(&mut self, id: u16);
-}
-
 trait DeviceIdxAccessNew<'a> {
     fn id_cell<'b>(&'b mut self) -> &'b mut DeviceIdxCell<'a>;
 }
@@ -1010,249 +935,160 @@ fn fill_device_idx<'a, R: DeviceIdxAccessNew<'a>, F: FnMut(ValueRange)>(
     device_rows
 }
 
-async fn adjust_device_idx<R: DeviceIdxAccess>(
-    device_ids_of_rooms: HashMap<Room, Vec<(CellCoordinates, R)>>,
-    sheet_name: &str,
-    updates: &mut Vec<ValueRange>,
-) -> Result<Vec<R>, GoogleDataError> {
-    let mut device_rows = Vec::new();
-    for devices in device_ids_of_rooms.into_values() {
-        let mut occupied_ids = HashSet::new();
-        let mut remaining_devices = Vec::with_capacity(devices.len());
-        for (coordinates, row) in devices {
-            if if let Some(id) = row.existing_id() {
-                if occupied_ids.contains(&id) {
-                    true
-                } else {
-                    occupied_ids.insert(id);
-                    false
-                }
-            } else {
-                true
-            } {
-                remaining_devices.push((coordinates, row));
-            } else {
-                device_rows.push(row);
-            };
-        }
-        let mut next_id = 0;
-        for (coordinates, mut row) in remaining_devices {
-            while occupied_ids.contains(&next_id) {
-                next_id += 1;
-            }
-            row.update_id(next_id);
-            device_rows.push(row);
-            updates.push(ValueRange {
-                major_dimension: None,
-                range: Some(format!("{}!{}", sheet_name, coordinates)),
-                values: Some(vec![vec![next_id.into()]]),
-            });
-            next_id += 1;
-        }
-    }
-    Ok(device_rows)
-}
-
 async fn parse_buttons<'a>(
     config: &GoogleSheet,
-    button_templates: &GoogleButtonTemplate,
-    button_config: &GoogleButtonData,
     spreadsheet_methods: &SpreadsheetMethods<'_, HttpsConnector<HttpConnector>>,
-    sheet: &'a Spreadsheet,
     state: Option<&State>,
     io_bricklets: &mut BTreeMap<Uid, Vec<ButtonSetting>>,
     single_button_adresses: &mut HashMap<Box<str>, SingleButtonKey>,
     dual_button_adresses: &mut HashMap<Box<str>, DualButtonKey>,
 ) -> Result<(), GoogleDataError> {
-    let mut button_template_map = HashMap::new();
-
-    if let Some(button_templates_grid) = find_sheet_by_name(sheet, button_templates.sheet()) {
-        let (_, _, mut rows) = get_grid_and_coordinates(button_templates_grid);
-        if let Some((_, header)) = rows.next() {
-            let [name_column, sub_device_column, discriminiator_column] = parse_headers(
-                header,
-                [
-                    button_templates.name(),
-                    button_templates.sub_devices(),
-                    button_templates.discriminator(),
-                ],
-            )
-            .map_err(GoogleDataError::ButtonTemplateHeader)?;
-            for (_, row) in rows {
-                if let (Some(name), Some(sub_devices), Some(discriminator)) = (
-                    get_cell_content(row, name_column),
-                    get_cell_content(row, sub_device_column),
-                    get_cell_content(row, discriminiator_column),
-                ) {
-                    let sub_devices = sub_devices
-                        .split(',')
-                        .collect::<Vec<_>>()
-                        .into_boxed_slice();
-                    if let Some(style) = if discriminator == "Single" {
-                        Some(ButtonStyle::Single)
-                    } else if discriminator == "Dual" {
-                        Some(ButtonStyle::Dual)
-                    } else {
-                        None
-                    } {
-                        button_template_map
-                            .insert(name, ButtonTemplateTypes { style, sub_devices });
-                    }
-                }
+    let mut button_template_map = HashMap::<Box<str>, _>::new();
+    let button_templates = config.button_templates();
+    for ([name, sub_device, discriminator], _) in GoogleTable::connect(
+        spreadsheet_methods,
+        [
+            button_templates.name(),
+            button_templates.sub_devices(),
+            button_templates.discriminator(),
+        ],
+        [],
+        config.spreadsheet_id(),
+        button_templates.sheet(),
+        button_templates.range(),
+    )
+    .await?
+    {
+        if let (Some(name), Some(sub_devices), Some(discriminator)) = (
+            name.get_content().map(|v| v.into()),
+            sub_device.get_content(),
+            discriminator.get_content(),
+        ) {
+            let sub_devices = sub_devices
+                .split(',')
+                .map(|v| v.into())
+                .collect::<Vec<_>>()
+                .into_boxed_slice();
+            if let Some(style) = if discriminator == "Single" {
+                Some(ButtonStyle::Single)
+            } else if discriminator == "Dual" {
+                Some(ButtonStyle::Dual)
+            } else {
+                None
+            } {
+                button_template_map.insert(name, ButtonTemplateTypes { style, sub_devices });
             }
         }
     }
-    if let Some(button_grid) = find_sheet_by_name(sheet, button_config.sheet()) {
-        struct ButtonRowContent<'a> {
-            room: Room,
-            button_template: &'a ButtonTemplateTypes<'a>,
-            button_id: &'a str,
-            button_id_in_room: Option<u16>,
-            device_address: Uid,
-            first_input_idx: u8,
+
+    let button_config = config.buttons();
+    struct ButtonRowContent<'a> {
+        device_idx: DeviceIdxCell<'a>,
+        button_template: &'a ButtonTemplateTypes,
+        button_id: Box<str>,
+        device_address: Uid,
+        first_input_idx: u8,
+    }
+    impl<'a> DeviceIdxAccessNew<'a> for ButtonRowContent<'a> {
+        fn id_cell<'b>(&'b mut self) -> &'b mut DeviceIdxCell<'a> {
+            &mut self.device_idx
         }
-        let (start_row, start_column, mut rows) = get_grid_and_coordinates(button_grid);
-        if let Some((_, header)) = rows.next() {
-            let [room_column, button_id_column, button_idx_column, type_column, device_address_column, first_input_idx_column, state_column] =
-                parse_headers(
-                    header,
-                    [
-                        button_config.room_id(),
-                        button_config.button_id(),
-                        button_config.button_idx(),
-                        button_config.button_type(),
-                        button_config.device_address(),
-                        button_config.first_input_idx(),
-                        button_config.state(),
-                    ],
-                )
-                .map_err(GoogleDataError::ButtonHeader)?;
-            let mut button_ids_of_rooms = HashMap::<_, Vec<_>>::new();
-            let mut updates = Vec::new();
-            for (row_idx, row) in rows {
-                if let (
-                    Some(room),
-                    Some(button_id),
-                    button_id_in_room,
-                    Some(button_template),
-                    Some(device_address),
-                    Some(first_input_idx),
-                    state_data,
-                ) = (
-                    get_cell_content(row, room_column)
-                        .map(Room::from_str)
-                        .and_then(Result::ok),
-                    get_cell_content(row, button_id_column),
-                    get_cell_integer(row, button_idx_column).map(|id| id as u16),
-                    get_cell_content(row, type_column).and_then(|t| button_template_map.get(t)),
-                    get_cell_content(row, device_address_column)
-                        .map(Uid::from_str)
-                        .and_then(Result::ok),
-                    get_cell_integer(row, first_input_idx_column).map(|id| id as u8),
-                    get_cell_content(row, state_column),
-                ) {
-                    let row = row_idx + start_row;
-                    let col = button_idx_column + start_column;
-                    let coordinates = CellCoordinates { row, col };
-                    update_state(
-                        &mut updates,
-                        button_config.sheet(),
-                        CellCoordinates {
-                            row,
-                            col: start_column + state_column,
-                        },
-                        device_address,
-                        state,
-                        state_data,
-                    );
-                    button_ids_of_rooms.entry(room).or_default().push((
-                        coordinates,
-                        ButtonRowContent {
-                            room,
-                            button_template,
-                            button_id,
-                            button_id_in_room,
-                            device_address,
-                            first_input_idx,
-                        },
-                    ));
-                }
-            }
-            let mut button_device_rows = Vec::new();
-            for devices in button_ids_of_rooms.into_values() {
-                let mut occupied_ids = HashSet::new();
-                let mut remaining_devices = Vec::with_capacity(devices.len());
-                for (coordinates, button_row) in devices {
-                    if if let Some(id) = button_row.button_id_in_room {
-                        if occupied_ids.contains(&id) {
-                            true
-                        } else {
-                            occupied_ids.insert(id);
-                            false
-                        }
-                    } else {
-                        true
-                    } {
-                        remaining_devices.push((coordinates, button_row));
-                    } else {
-                        button_device_rows.push(button_row);
-                    };
-                }
-                let mut next_id = 0;
-                for (coordinates, mut row) in remaining_devices {
-                    while occupied_ids.contains(&next_id) {
-                        next_id += 1;
-                    }
-                    row.button_id_in_room = Some(next_id);
-                    button_device_rows.push(row);
-                    updates.push(ValueRange {
-                        major_dimension: None,
-                        range: Some(format!("{}!{}", button_config.sheet(), coordinates)),
-                        values: Some(vec![vec![next_id.into()]]),
+    }
+    let mut button_ids_of_rooms = HashMap::<_, Vec<_>>::new();
+    let mut updates = Vec::new();
+
+    for ([room, button, button_idx, button_type, device_address, first_input_idx, old_state], _) in
+        GoogleTable::connect(
+            spreadsheet_methods,
+            [
+                button_config.room_id(),
+                button_config.button_id(),
+                button_config.button_idx(),
+                button_config.button_type(),
+                button_config.device_address(),
+                button_config.first_input_idx(),
+                button_config.state(),
+            ],
+            [],
+            config.spreadsheet_id(),
+            button_config.sheet(),
+            button_config.range(),
+        )
+        .await?
+    {
+        if let (
+            Some(room),
+            Some(button_id),
+            device_idx,
+            Some(button_template),
+            Some(device_address),
+            Some(first_input_idx),
+            state_data,
+        ) = (
+            room.get_content().map(Room::from_str).and_then(Result::ok),
+            button.get_content().map(|s| s.into()),
+            DeviceIdxCell(button_idx),
+            button_type
+                .get_content()
+                .and_then(|t| button_template_map.get(t)),
+            device_address
+                .get_content()
+                .map(Uid::from_str)
+                .and_then(Result::ok),
+            first_input_idx.get_integer().map(|id| id as u8),
+            old_state,
+        ) {
+            update_state_new(|v| updates.push(v), state, &state_data, device_address);
+            button_ids_of_rooms
+                .entry(room)
+                .or_default()
+                .push(ButtonRowContent {
+                    button_template,
+                    button_id,
+                    device_idx,
+                    device_address,
+                    first_input_idx,
+                });
+        }
+    }
+    let button_device_rows = fill_device_idx(|v| updates.push(v), button_ids_of_rooms);
+    for (idx, button_row) in button_device_rows {
+        let io_bricklet_settings = io_bricklets.entry(button_row.device_address).or_default();
+        let mut current_input_idx = button_row.first_input_idx;
+        for (subdevice_id, subdevice_name) in
+            button_row.button_template.sub_devices.iter().enumerate()
+        {
+            let device_key = format!("{}, {}", button_row.button_id, subdevice_name);
+
+            let sub_device_in_room = SubDeviceInRoom {
+                room: idx.room,
+                device_idx: idx.idx,
+                sub_device_idx: subdevice_id as u16,
+            };
+            match button_row.button_template.style {
+                ButtonStyle::Single => {
+                    let output = SingleButtonKey::Button(sub_device_in_room);
+                    io_bricklet_settings.push(ButtonSetting::Single {
+                        button: current_input_idx,
+                        output,
                     });
-                    next_id += 1;
+                    single_button_adresses.insert(device_key.into(), output);
+                    current_input_idx += 1;
                 }
-            }
-            write_updates_to_sheet(config, spreadsheet_methods, updates).await?;
-            for button_row in button_device_rows {
-                let io_bricklet_settings =
-                    io_bricklets.entry(button_row.device_address).or_default();
-                let mut current_input_idx = button_row.first_input_idx;
-                for (subdevice_id, subdevice_name) in
-                    button_row.button_template.sub_devices.iter().enumerate()
-                {
-                    let device_key = format!("{}, {}", button_row.button_id, subdevice_name);
-
-                    let sub_device_in_room = SubDeviceInRoom {
-                        room: button_row.room,
-                        device_idx: button_row.button_id_in_room.unwrap(),
-                        sub_device_idx: subdevice_id as u16,
-                    };
-                    match button_row.button_template.style {
-                        ButtonStyle::Single => {
-                            let output = SingleButtonKey::Button(sub_device_in_room);
-                            io_bricklet_settings.push(ButtonSetting::Single {
-                                button: current_input_idx,
-                                output,
-                            });
-                            single_button_adresses.insert(device_key.into(), output);
-                            current_input_idx += 1;
-                        }
-                        ButtonStyle::Dual => {
-                            let output = DualButtonKey(sub_device_in_room);
-                            io_bricklet_settings.push(ButtonSetting::Dual {
-                                up_button: current_input_idx + 1,
-                                down_button: current_input_idx,
-                                output,
-                            });
-                            dual_button_adresses.insert(device_key.into(), output);
-                            current_input_idx += 2;
-                        }
-                    }
+                ButtonStyle::Dual => {
+                    let output = DualButtonKey(sub_device_in_room);
+                    io_bricklet_settings.push(ButtonSetting::Dual {
+                        up_button: current_input_idx + 1,
+                        down_button: current_input_idx,
+                        output,
+                    });
+                    dual_button_adresses.insert(device_key.into(), output);
+                    current_input_idx += 2;
                 }
             }
         }
     }
+    write_updates_to_sheet(config, spreadsheet_methods, updates).await?;
     Ok(())
 }
 
@@ -1310,78 +1146,6 @@ fn update_state_new<F: FnMut(ValueRange)>(
             updater(update);
         }
     }
-}
-
-fn update_state(
-    updates: &mut Vec<ValueRange>,
-    sheet_name: &str,
-    cell_coordinates: CellCoordinates,
-    uid: Uid,
-    current_state: Option<&State>,
-    stored_state: Option<&str>,
-) {
-    if let Some(current_state) = current_state {
-        let new_text = match current_state.bricklet(&uid) {
-            None => "Not found".to_string(),
-            Some(&BrickletConnectionData {
-                ref state,
-                last_change,
-                endpoint,
-                ref metadata,
-            }) => {
-                let timestamp = DateTime::<Local>::from(last_change);
-                if let Some(BrickletMetadata {
-                    connected_uid,
-                    position,
-                    hardware_version,
-                    firmware_version,
-                }) = metadata
-                {
-                    format!("{state}, {timestamp}, {endpoint}; {connected_uid}, {position}")
-                } else {
-                    format!("{state}, {timestamp}, {endpoint}")
-                }
-            }
-        };
-        if stored_state != Some(&new_text) {
-            updates.push(ValueRange {
-                major_dimension: None,
-                range: Some(format!("{}!{}", sheet_name, cell_coordinates)),
-                values: Some(vec![vec![new_text.into()]]),
-            });
-        }
-    }
-}
-
-fn find_sheet_by_name<'a>(sheet: &'a Spreadsheet, name_of_sheet: &str) -> Option<&'a GridData> {
-    sheet
-        .sheets
-        .iter()
-        .flatten()
-        .filter(|s| {
-            s.properties
-                .as_ref()
-                .and_then(|p| p.title.as_deref())
-                .map(|t| t == name_of_sheet)
-                .unwrap_or_default()
-        })
-        .flat_map(|s| &s.data)
-        .flatten()
-        .next()
-}
-
-fn get_cell_content(row: &[CellData], idx: usize) -> Option<&str> {
-    row.get(idx).and_then(|f| f.formatted_value.as_deref())
-}
-
-fn get_cell_number(row: &[CellData], idx: usize) -> Option<f64> {
-    row.get(idx)
-        .and_then(|f| f.user_entered_value.as_ref())
-        .and_then(|v| v.number_value)
-}
-
-fn get_cell_integer(row: &[CellData], idx: usize) -> Option<i64> {
-    get_cell_number(row, idx).map(|v| v.round() as i64)
 }
 
 struct GoogleTable<'a, const N: usize, const M: usize> {
@@ -1627,21 +1391,6 @@ fn parse_dynamic_headers(
     } else {
         Err(HeaderError(missing_headers.into_boxed_slice()))
     }
-}
-
-fn get_grid_and_coordinates(
-    light_grid: &GridData,
-) -> (usize, usize, impl Iterator<Item = (usize, &Vec<CellData>)>) {
-    let start_row = light_grid.start_row.unwrap_or_default() as usize;
-    let start_column = light_grid.start_column.unwrap_or_default() as usize;
-    let rows = light_grid
-        .row_data
-        .iter()
-        .flatten()
-        .map(|r| &r.values)
-        .enumerate()
-        .filter_map(|(idx, r)| r.as_ref().map(|row| (idx, row)));
-    (start_row, start_column, rows)
 }
 
 #[derive(Copy, Clone)]
