@@ -136,15 +136,27 @@ async fn config_update_loop(
     let mut state_received = false;
     let mut config_timer = None;
 
-    info!("Start Loop");
-
     while let Some(message) = stream.next().await {
-        info!("Message: {message:?}");
         match message {
             MainLoopEvent::StatusUpdateMessage(update) => {
                 state_received = true;
-                known_state.process_msg(update);
-                fech_next_in(main_tx.clone(), &mut config_timer, Duration::from_secs(15));
+                if known_state.process_msg(update.clone()) {
+                    match update {
+                        StateUpdateMessage::EndpointConnected(ip) => {
+                            info!("Endpoint {ip} connected");
+                        }
+                        StateUpdateMessage::EndpointDisconnected(ip) => {
+                            info!("Endpoint {ip} disconnected");
+                        }
+                        StateUpdateMessage::BrickletConnected { uid, .. } => {
+                            info!("Bricklet {uid} connected");
+                        }
+                        StateUpdateMessage::BrickletDisconnected { uid, .. } => {
+                            info!("Bricklet {uid} disconnected");
+                        }
+                    }
+                    fech_next_in(main_tx.clone(), &mut config_timer, Duration::from_secs(2));
+                }
             }
             MainLoopEvent::FetchConfig => {
                 let wiring = fetch_config(

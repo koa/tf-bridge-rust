@@ -18,7 +18,7 @@ pub struct State {
     bricklets: HashMap<Uid, BrickletConnectionData>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum StateUpdateMessage {
     EndpointConnected(IpAddr),
     EndpointDisconnected(IpAddr),
@@ -187,7 +187,7 @@ pub enum ConnectionState {
 }
 
 impl State {
-    pub fn process_msg(&mut self, msg: StateUpdateMessage) {
+    pub fn process_msg(&mut self, msg: StateUpdateMessage) -> bool {
         match msg {
             StateUpdateMessage::EndpointConnected(ip) => match self.endpoints.entry(ip) {
                 Entry::Occupied(mut entry) => {
@@ -196,6 +196,9 @@ impl State {
                             state: ConnectionState::Connected,
                             last_change: SystemTime::now(),
                         });
+                        true
+                    } else {
+                        false
                     }
                 }
                 Entry::Vacant(new_entry) => {
@@ -203,6 +206,7 @@ impl State {
                         state: ConnectionState::Connected,
                         last_change: SystemTime::now(),
                     });
+                    true
                 }
             },
             StateUpdateMessage::EndpointDisconnected(ip) => {
@@ -210,7 +214,12 @@ impl State {
                     if entry.state != ConnectionState::Disconnected {
                         entry.state = ConnectionState::Disconnected;
                         entry.last_change = SystemTime::now();
+                        true
+                    } else {
+                        false
                     }
+                } else {
+                    false
                 }
             }
             StateUpdateMessage::BrickletConnected {
@@ -226,6 +235,9 @@ impl State {
                             endpoint,
                             metadata: Some(metadata),
                         });
+                        true
+                    } else {
+                        false
                     }
                 }
                 Entry::Vacant(new_entry) => {
@@ -235,6 +247,7 @@ impl State {
                         endpoint,
                         metadata: Some(metadata),
                     });
+                    true
                 }
             },
             StateUpdateMessage::BrickletDisconnected { uid, endpoint } => {
@@ -244,7 +257,12 @@ impl State {
                     {
                         entry_data.last_change = SystemTime::now();
                         entry_data.state = ConnectionState::Disconnected;
+                        true
+                    } else {
+                        false
                     }
+                } else {
+                    false
                 }
             }
         }
