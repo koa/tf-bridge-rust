@@ -21,7 +21,7 @@ config = "0.14.0"
 lazy_static = "1.4.0"
 actix-web = "4.4.0"
 actix-web-prometheus = { version = "0.1.2", features = ["process"] }
-env_logger = "0.11.0"
+env_logger = "0.11.1"
 log = "0.4"
 strum_macros = "0.26.1"
 strum = "0.26.1"
