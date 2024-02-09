@@ -595,7 +595,7 @@ impl GoogleSheetWireBuilder {
             let key = SingleButtonKey::MotionDetector(device_idx);
             self.motion_detector_sensors
                 .insert(row.device_address, MotionDetectorSettings { output: key });
-            self.single_button_adresses.insert(row.id, key);
+            self.motion_detector_adresses.insert(row.id, key);
         }
         Ok(())
     }
@@ -1089,27 +1089,6 @@ fn fill_device_idx<'a, R: DeviceIdxAccessNew<'a>, F: FnMut(ValueRange)>(
     }
 
     device_rows
-}
-
-async fn write_updates_to_sheet(
-    config: &GoogleSheet,
-    spreadsheet_methods: &SpreadsheetMethods<'_, HttpsConnector<HttpConnector>>,
-    updates: Vec<ValueRange>,
-) -> Result<(), GoogleDataError> {
-    if !updates.is_empty() {
-        let update = BatchUpdateValuesRequest {
-            data: Some(updates),
-            include_values_in_response: None,
-            response_date_time_render_option: None,
-            response_value_render_option: None,
-            value_input_option: Some("RAW".to_string()),
-        };
-        spreadsheet_methods
-            .values_batch_update(update, config.spreadsheet_id())
-            .doit()
-            .await?;
-    }
-    Ok(())
 }
 
 fn update_state_new<F: FnMut(ValueRange)>(
