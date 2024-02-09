@@ -17,7 +17,7 @@ prometheus = "0.13.3"
 serde = { version = "1.0.196", features = ["derive"] }
 serde_yaml = "0.9.31"
 serde_json = "1"
-config = "0.13.3"
+config = "0.14.0"
 lazy_static = "1.4.0"
 actix-web = "4.4.0"
 actix-web-prometheus = { version = "0.1.2", features = ["process"] }
