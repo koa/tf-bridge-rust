@@ -4,12 +4,6 @@ use std::fmt::{Display, Formatter};
 use std::net::IpAddr;
 use std::time::SystemTime;
 
-use tinkerforge_async::base58::Base58Error;
-use tinkerforge_async::{
-    dmx_bricklet, industrial_quad_relay_v2_bricklet, io16_bricklet, io16_v2_bricklet,
-    lcd_128x64_bricklet, motion_detector_v2_bricklet, temperature_v2_bricklet,
-};
-
 use crate::data::Uid;
 
 #[derive(Default, Debug)]
@@ -33,138 +27,18 @@ pub enum StateUpdateMessage {
     },
 }
 
-impl TryFrom<(IpAddr, io16_bricklet::Identity)> for StateUpdateMessage {
-    type Error = Base58Error;
-
-    fn try_from((endpoint, id): (IpAddr, io16_bricklet::Identity)) -> Result<Self, Self::Error> {
-        Ok(StateUpdateMessage::BrickletConnected {
-            uid: id.uid.parse()?,
-            endpoint,
-            metadata: BrickletMetadata {
-                connected_uid: id.connected_uid.parse()?,
-                position: id.position,
-                hardware_version: id.hardware_version,
-                firmware_version: id.firmware_version,
-            },
-        })
-    }
-}
-impl TryFrom<(IpAddr, io16_v2_bricklet::Identity)> for StateUpdateMessage {
-    type Error = Base58Error;
-
-    fn try_from((endpoint, id): (IpAddr, io16_v2_bricklet::Identity)) -> Result<Self, Self::Error> {
-        Ok(StateUpdateMessage::BrickletConnected {
-            uid: id.uid.parse()?,
-            endpoint,
-            metadata: BrickletMetadata {
-                connected_uid: id.connected_uid.parse()?,
-                position: id.position,
-                hardware_version: id.hardware_version,
-                firmware_version: id.firmware_version,
-            },
-        })
-    }
-}
-
-impl TryFrom<(IpAddr, dmx_bricklet::Identity)> for StateUpdateMessage {
-    type Error = Base58Error;
-
-    fn try_from((endpoint, id): (IpAddr, dmx_bricklet::Identity)) -> Result<Self, Self::Error> {
-        Ok(StateUpdateMessage::BrickletConnected {
-            uid: id.uid.parse()?,
-            endpoint,
-            metadata: BrickletMetadata {
-                connected_uid: id.connected_uid.parse()?,
-                position: id.position,
-                hardware_version: id.hardware_version,
-                firmware_version: id.firmware_version,
-            },
-        })
-    }
-}
-impl TryFrom<(IpAddr, industrial_quad_relay_v2_bricklet::Identity)> for StateUpdateMessage {
-    type Error = Base58Error;
-
-    fn try_from(
-        (endpoint, id): (IpAddr, industrial_quad_relay_v2_bricklet::Identity),
-    ) -> Result<Self, Self::Error> {
-        Ok(StateUpdateMessage::BrickletConnected {
-            uid: id.uid.parse()?,
-            endpoint,
-            metadata: BrickletMetadata {
-                connected_uid: id.connected_uid.parse()?,
-                position: id.position,
-                hardware_version: id.hardware_version,
-                firmware_version: id.firmware_version,
-            },
-        })
-    }
-}
-impl TryFrom<(IpAddr, lcd_128x64_bricklet::Identity)> for StateUpdateMessage {
-    type Error = Base58Error;
-
-    fn try_from(
-        (endpoint, id): (IpAddr, lcd_128x64_bricklet::Identity),
-    ) -> Result<Self, Self::Error> {
-        Ok(StateUpdateMessage::BrickletConnected {
-            uid: id.uid.parse()?,
-            endpoint,
-            metadata: BrickletMetadata {
-                connected_uid: id.connected_uid.parse()?,
-                position: id.position,
-                hardware_version: id.hardware_version,
-                firmware_version: id.firmware_version,
-            },
-        })
-    }
-}
-impl TryFrom<(IpAddr, temperature_v2_bricklet::Identity)> for StateUpdateMessage {
-    type Error = Base58Error;
-
-    fn try_from(
-        (endpoint, id): (IpAddr, temperature_v2_bricklet::Identity),
-    ) -> Result<Self, Self::Error> {
-        Ok(StateUpdateMessage::BrickletConnected {
-            uid: id.uid.parse()?,
-            endpoint,
-            metadata: BrickletMetadata {
-                connected_uid: id.connected_uid.parse()?,
-                position: id.position,
-                hardware_version: id.hardware_version,
-                firmware_version: id.firmware_version,
-            },
-        })
-    }
-}
-impl TryFrom<(IpAddr, motion_detector_v2_bricklet::Identity)> for StateUpdateMessage {
-    type Error = Base58Error;
-
-    fn try_from(
-        (endpoint, id): (IpAddr, motion_detector_v2_bricklet::Identity),
-    ) -> Result<Self, Self::Error> {
-        Ok(StateUpdateMessage::BrickletConnected {
-            uid: id.uid.parse()?,
-            endpoint,
-            metadata: BrickletMetadata {
-                connected_uid: id.connected_uid.parse()?,
-                position: id.position,
-                hardware_version: id.hardware_version,
-                firmware_version: id.firmware_version,
-            },
-        })
-    }
-}
-
 #[derive(Debug)]
 pub struct ConnectionStateMsg<ID> {
     pub state: ConnectionState,
     pub id: ID,
 }
+
 #[derive(Debug)]
 pub struct ConnectionData {
     pub state: ConnectionState,
     pub last_change: SystemTime,
 }
+
 #[derive(Debug)]
 pub struct BrickletConnectionData {
     pub state: ConnectionState,
@@ -172,15 +46,17 @@ pub struct BrickletConnectionData {
     pub endpoint: IpAddr,
     pub metadata: Option<BrickletMetadata>,
 }
+
 #[derive(Debug, Copy, Clone)]
 pub struct BrickletMetadata {
     pub connected_uid: Uid,
     pub position: char,
     pub hardware_version: [u8; 3],
     pub firmware_version: [u8; 3],
+    pub device_identifier: u16,
 }
 
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq, Copy, Clone, Ord, PartialOrd)]
 pub enum ConnectionState {
     Connected,
     Disconnected,
@@ -273,7 +149,11 @@ impl State {
     pub fn bricklet(&self, uid: &Uid) -> Option<&BrickletConnectionData> {
         self.bricklets.get(uid)
     }
+    pub fn bricklets(&self) -> &HashMap<Uid, BrickletConnectionData> {
+        &self.bricklets
+    }
 }
+
 impl Display for ConnectionState {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {

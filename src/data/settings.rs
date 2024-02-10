@@ -44,6 +44,7 @@ impl TinkerforgeEndpoint {
         self.port.unwrap_or(4223)
     }
 }
+
 #[derive(Deserialize, Debug)]
 pub struct GoogleSheet {
     key_file: Option<Box<str>>,
@@ -57,14 +58,18 @@ pub struct GoogleSheet {
     room_controllers: GoogleRoomController,
     motion_detectors: GoogleMotionDetectors,
     relays: GoogleRelay,
+    available_bricklets: GoogleAvailableBricklets,
 }
+
 #[derive(Deserialize, Debug)]
 pub struct GoogleEndpointData {
     sheet: Box<str>,
     range: Box<str>,
     address: Box<str>,
     state: Box<str>,
+    place: Box<str>,
 }
+
 #[derive(Deserialize, Debug)]
 pub struct GoogleButtonData {
     sheet: Box<str>,
@@ -86,6 +91,7 @@ pub struct GoogleButtonTemplate {
     discriminator: Box<str>,
     sub_devices: Box<str>,
 }
+
 #[derive(Deserialize, Debug)]
 pub struct GoogleLightTemplateData {
     sheet: Box<str>,
@@ -95,6 +101,7 @@ pub struct GoogleLightTemplateData {
     temperature_warm_column: Box<str>,
     temperature_cold_column: Box<str>,
 }
+
 #[derive(Deserialize, Debug)]
 pub struct GoogleLightData {
     sheet: Box<str>,
@@ -111,6 +118,7 @@ pub struct GoogleLightData {
     touchscreen_brightness: Box<str>,
     state: Box<str>,
 }
+
 #[derive(Deserialize, Debug)]
 pub struct GoogleRoomController {
     sheet: Box<str>,
@@ -127,6 +135,7 @@ pub struct GoogleRoomController {
     touchscreen_state: Box<str>,
     temperature_state: Box<str>,
 }
+
 #[derive(Deserialize, Debug)]
 pub struct GoogleMotionDetectors {
     sheet: Box<str>,
@@ -137,6 +146,7 @@ pub struct GoogleMotionDetectors {
     idx: Box<str>,
     state: Box<str>,
 }
+
 #[derive(Deserialize, Debug)]
 pub struct GoogleRelay {
     sheet: Box<str>,
@@ -150,6 +160,26 @@ pub struct GoogleRelay {
     ring_button: Box<str>,
     state: Box<str>,
 }
+
+#[derive(Deserialize, Debug)]
+pub struct GoogleAvailableBricklets {
+    sheet: Box<str>,
+    range: Box<str>,
+    endpoint: Box<str>,
+    master_id: Box<str>,
+    connector: Box<str>,
+    uid: Box<str>,
+    device_type: Box<str>,
+    hardware_version: Box<str>,
+    firmware_version: Box<str>,
+    io_ports: Box<str>,
+    motion_detectors: Box<str>,
+    temp_sensor: Box<str>,
+    display: Box<str>,
+    dmx_channels: Box<str>,
+    relays: Box<str>,
+}
+
 #[derive(Error, Debug)]
 pub enum GoogleError {
     #[error("IO Error {0}")]
@@ -211,7 +241,12 @@ impl GoogleSheet {
     pub fn endpoints(&self) -> &GoogleEndpointData {
         &self.endpoints
     }
+
+    pub fn available_bricklets(&self) -> &GoogleAvailableBricklets {
+        &self.available_bricklets
+    }
 }
+
 impl GoogleEndpointData {
     pub fn sheet(&self) -> &str {
         &self.sheet
@@ -225,7 +260,12 @@ impl GoogleEndpointData {
     pub fn state(&self) -> &str {
         &self.state
     }
+
+    pub fn place(&self) -> &Box<str> {
+        &self.place
+    }
 }
+
 impl GoogleLightTemplateData {
     pub fn sheet(&self) -> &str {
         &self.sheet
@@ -246,6 +286,7 @@ impl GoogleLightTemplateData {
         &self.temperature_cold_column
     }
 }
+
 impl GoogleLightData {
     pub fn range(&self) -> &str {
         &self.range
@@ -320,6 +361,7 @@ impl GoogleButtonData {
         &self.state
     }
 }
+
 impl GoogleButtonTemplate {
     pub fn sheet(&self) -> &str {
         &self.sheet
@@ -383,6 +425,7 @@ impl GoogleRoomController {
         &self.temperature_state
     }
 }
+
 impl GoogleMotionDetectors {
     pub fn sheet(&self) -> &str {
         &self.sheet
@@ -406,6 +449,7 @@ impl GoogleMotionDetectors {
         &self.state
     }
 }
+
 impl GoogleRelay {
     pub fn sheet(&self) -> &str {
         &self.sheet
@@ -440,6 +484,55 @@ impl GoogleRelay {
     }
 }
 
+impl GoogleAvailableBricklets {
+    pub fn sheet(&self) -> &str {
+        &self.sheet
+    }
+    pub fn range(&self) -> &str {
+        &self.range
+    }
+    pub fn endpoint(&self) -> &str {
+        &self.endpoint
+    }
+    pub fn master_id(&self) -> &str {
+        &self.master_id
+    }
+    pub fn connector(&self) -> &str {
+        &self.connector
+    }
+    pub fn device_type(&self) -> &str {
+        &self.device_type
+    }
+    pub fn hardware_version(&self) -> &str {
+        &self.hardware_version
+    }
+    pub fn firmware_version(&self) -> &str {
+        &self.firmware_version
+    }
+    pub fn uid(&self) -> &str {
+        &self.uid
+    }
+
+    pub fn io_ports(&self) -> &str {
+        &self.io_ports
+    }
+    pub fn motion_detectors(&self) -> &str {
+        &self.motion_detectors
+    }
+    pub fn temp_sensor(&self) -> &str {
+        &self.temp_sensor
+    }
+    pub fn display(&self) -> &str {
+        &self.display
+    }
+    pub fn dmx_channels(&self) -> &str {
+        &self.dmx_channels
+    }
+    pub fn relays(&self) -> &str {
+        &self.relays
+    }
+}
+
 #[derive(Debug)]
 pub struct Settings {
     pub server: ServerSettings,
@@ -448,6 +541,7 @@ pub struct Settings {
 }
 
 const DEFAULT_IP_ADDRESS: IpAddr = IpAddr::V6(Ipv6Addr::UNSPECIFIED);
+
 impl ServerSettings {
     pub fn port(&self) -> u16 {
         self.port.unwrap_or(8080)
@@ -471,6 +565,7 @@ impl ServerSettings {
             .unwrap_or("state.ron")
     }
 }
+
 fn create_settings() -> Result<Settings, ConfigError> {
     let cfg = Config::builder()
         .add_source(File::with_name("config.yaml"))

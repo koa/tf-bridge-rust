@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+use std::time::SystemTime;
 use std::{
     array,
     collections::{BTreeMap, HashMap, HashSet},
@@ -20,7 +22,17 @@ use google_sheets4::{
 use log::error;
 use serde::Deserialize;
 use thiserror::Error;
+use tinkerforge_async::dmx_bricklet::DmxBricklet;
+use tinkerforge_async::industrial_quad_relay_v2_bricklet::IndustrialQuadRelayV2Bricklet;
+use tinkerforge_async::io16_bricklet::Io16Bricklet;
+use tinkerforge_async::io16_v2_bricklet::Io16V2Bricklet;
+use tinkerforge_async::isolator_bricklet::IsolatorBricklet;
+use tinkerforge_async::lcd_128x64_bricklet::Lcd128x64Bricklet;
+use tinkerforge_async::master_brick::MasterBrick;
+use tinkerforge_async::motion_detector_v2_bricklet::MotionDetectorV2Bricklet;
+use tinkerforge_async::temperature_v2_bricklet::TemperatureV2Bricklet;
 
+use crate::data::state::ConnectionState;
 use crate::{
     data::{
         registry::{
@@ -116,6 +128,8 @@ pub async fn read_sheet_data(state: Option<&State>) -> Result<Option<Wiring>, Go
         builder.parse_lights(&context).await?;
         builder.parse_relays(&context).await?;
 
+        builder.update_available_devices(&context).await?;
+
         builder.write_updates_to_sheet(&context).await?;
 
         Some(builder.build_wiring())
@@ -147,10 +161,213 @@ struct GoogleSheetWireBuilder {
     touchscreen_brightness_addresses: HashMap<Box<str>, BrightnessKey>,
     motion_detector_adresses: HashMap<Box<str>, SingleButtonKey>,
 
+    endpoint_names: HashMap<IpAddr, Box<str>>,
+
     updates: Vec<ValueRange>,
 }
 
+enum Connection {
+    Master { position: u8 },
+    Isolator { parent: Uid, position: char },
+}
+
 impl GoogleSheetWireBuilder {
+    async fn update_available_devices<'a>(
+        &'a mut self,
+        context: &'a ParserContext<'a>,
+    ) -> Result<(), GoogleDataError> {
+        if let Some(state) = context.state {
+            let config = context.config.available_bricklets();
+            let mut output_table = GoogleTable::connect(
+                &context.spreadsheet_methods,
+                [
+                    config.endpoint(),
+                    config.master_id(),
+                    config.connector(),
+                    config.uid(),
+                    config.device_type(),
+                    config.hardware_version(),
+                    config.firmware_version(),
+                    config.io_ports(),
+                    config.motion_detectors(),
+                    config.temp_sensor(),
+                    config.display(),
+                    config.dmx_channels(),
+                    config.relays(),
+                ],
+                [],
+                context.config.spreadsheet_id(),
+                config.sheet(),
+                config.range(),
+            )
+            .await?;
+            #[derive(Ord, PartialOrd, Eq, PartialEq)]
+            struct BrickletRow {
+                endpoint_addr: IpAddr,
+                master_idx: Option<u8>,
+                connector: char,
+                uid: Uid,
+                device_type: u16,
+                hardware_version: TinkerforgeVersion,
+                firmware_version: TinkerforgeVersion,
+                state: ConnectionState,
+                last_change: SystemTime,
+            }
+            let master_positions = state
+                .bricklets()
+                .iter()
+                .filter_map(|(uid, BrickletConnectionData { metadata, .. })| {
+                    metadata.as_ref().and_then(
+                        |BrickletMetadata {
+                             position,
+                             device_identifier,
+                             connected_uid,
+                             ..
+                         }| {
+                            match *device_identifier {
+                                MasterBrick::DEVICE_IDENTIFIER => Some((
+                                    *uid,
+                                    Connection::Master {
+                                        position: *position as u8 - b'0',
+                                    },
+                                )),
+                                IsolatorBricklet::DEVICE_IDENTIFIER => Some((
+                                    *uid,
+                                    Connection::Isolator {
+                                        parent: *connected_uid,
+                                        position: *position,
+                                    },
+                                )),
+                                _ => None,
+                            }
+                        },
+                    )
+                })
+                .collect::<HashMap<_, _>>();
+
+            let mut rows = state
+                .bricklets()
+                .iter()
+                .filter_map(
+                    |(
+                        uid,
+                        BrickletConnectionData {
+                            state,
+                            last_change,
+                            endpoint,
+                            metadata,
+                        },
+                    )| {
+                        metadata.as_ref().map(
+                            |BrickletMetadata {
+                                 connected_uid,
+                                 position,
+                                 hardware_version,
+                                 firmware_version,
+                                 device_identifier,
+                             }| {
+                                let (master_idx, connector) = Self::find_connection(
+                                    &master_positions,
+                                    *connected_uid,
+                                    *position,
+                                );
+                                BrickletRow {
+                                    endpoint_addr: *endpoint,
+                                    master_idx,
+                                    connector,
+                                    uid: *uid,
+                                    device_type: *device_identifier,
+                                    hardware_version: TinkerforgeVersion(*hardware_version),
+                                    firmware_version: TinkerforgeVersion(*firmware_version),
+                                    state: *state,
+                                    last_change: *last_change,
+                                }
+                            },
+                        )
+                    },
+                )
+                .collect::<Vec<_>>();
+            rows.sort();
+
+            let rows = rows.into_iter().map(|row| {
+                let io_count: Option<u16> = self.io_bricklets.get(&row.uid).map(|v| {
+                    v.iter()
+                        .map(|s| match s {
+                            ButtonSetting::Dual { .. } => 2,
+                            ButtonSetting::Single { .. } => 1,
+                        })
+                        .sum()
+                });
+                let temperature_sensor = self.temperature_sensors.get(&row.uid).is_some();
+                let motion_detector = self.motion_detector_sensors.get(&row.uid).is_some();
+                let lcd_screen = self.lcd_screens.get(&row.uid).is_some();
+                let dmx_count: Option<u16> = self.dmx_bricklets.get(&row.uid).map(|v| {
+                    v.iter()
+                        .map(|s| match s {
+                            DmxConfigEntry::Dimm { .. } => 1,
+                            DmxConfigEntry::DimmWhitebalance { .. } => 2,
+                            DmxConfigEntry::Switch { .. } => 1,
+                        })
+                        .sum()
+                });
+                let relay_count = self.relays.get(&row.uid).map(|rs| rs.entries.len());
+                [
+                    (&**self
+                        .endpoint_names
+                        .get(&row.endpoint_addr)
+                        .map(Cow::Borrowed)
+                        .unwrap_or_else(|| {
+                            Cow::Owned(row.endpoint_addr.to_string().into_boxed_str())
+                        })
+                        .as_ref())
+                        .into(),
+                    row.master_idx.unwrap_or_default().into(),
+                    row.connector.to_string().into(),
+                    row.uid.to_string().into(),
+                    identify_device_type(row.device_type),
+                    row.hardware_version.to_string().into(),
+                    row.firmware_version.to_string().into(),
+                    io_count.into(),
+                    show_bool(temperature_sensor),
+                    show_bool(motion_detector),
+                    show_bool(lcd_screen),
+                    dmx_count.into(),
+                    relay_count.into(),
+                ]
+            });
+            for data_row in rows {
+                if let Some((table_row, _)) = output_table.next() {
+                    for (cell, value) in table_row.iter().zip(data_row.into_iter()) {
+                        if Some(&value) != cell.get_value().as_ref() {
+                            self.updates.push(cell.override_cell(value));
+                        }
+                    }
+                } else {
+                    output_table.append_row((data_row, []), |v| self.updates.push(v));
+                }
+            }
+            output_table.clean_remaining_rows(|v| self.updates.push(v));
+        }
+        Ok(())
+    }
+
+    fn find_connection(
+        master_positions: &HashMap<Uid, Connection>,
+        connected_uid: Uid,
+        position: char,
+    ) -> (Option<u8>, char) {
+        let (master_idx, connector) = match master_positions.get(&connected_uid) {
+            None => (None, position),
+            Some(Connection::Master {
+                position: master_position,
+            }) => (Some(*master_position), position),
+            Some(Connection::Isolator { parent, position }) => {
+                Self::find_connection(master_positions, *parent, *position)
+            }
+        };
+        (master_idx, connector)
+    }
+
     async fn write_updates_to_sheet<'a>(
         &'a mut self,
         context: &'a ParserContext<'a>,
@@ -173,28 +390,34 @@ impl GoogleSheetWireBuilder {
         }
         Ok(())
     }
+
     async fn parse_endpoints<'a>(
         &'a mut self,
         context: &'a ParserContext<'a>,
     ) -> Result<(), GoogleDataError> {
         let endpoints_config = context.config.endpoints();
-        for (address, state_cell) in GoogleTable::connect(
+        for (address, state_cell, place) in GoogleTable::connect(
             &context.spreadsheet_methods,
-            [endpoints_config.address(), endpoints_config.state()],
+            [
+                endpoints_config.address(),
+                endpoints_config.state(),
+                endpoints_config.place(),
+            ],
             [],
             context.config.spreadsheet_id(),
             endpoints_config.sheet(),
             endpoints_config.range(),
         )
         .await?
-        .filter_map(|([address, state], _)| {
+        .filter_map(|([address, state, place], _)| {
             address
                 .get_content()
                 .map(IpAddr::from_str)
                 .and_then(Result::ok)
-                .map(|ip| (ip, state))
+                .map(|ip| (ip, state, place.get_content().unwrap_or_default().into()))
         }) {
             self.endpoints.push(address);
+            self.endpoint_names.insert(address, place);
             if let Some(update) = context
                 .state
                 .and_then(|s| s.endpoint(&address))
@@ -236,7 +459,7 @@ impl GoogleSheetWireBuilder {
         heat_controllers.sort();
         ring_controllers.sort();
         endpoints.sort();
-        let wiring = Wiring {
+        Wiring {
             controllers: Controllers {
                 dual_input_dimmers: dual_input_dimmers.into_boxed_slice(),
                 dual_input_switches: dual_input_switches.into_boxed_slice(),
@@ -275,9 +498,9 @@ impl GoogleSheetWireBuilder {
                 relays,
                 temperature_sensors,
             },
-        };
-        wiring
+        }
     }
+
     async fn parse_relays<'a>(
         &mut self,
         context: &'a ParserContext<'a>,
@@ -388,6 +611,7 @@ impl GoogleSheetWireBuilder {
         }
         Ok(())
     }
+
     async fn parse_controllers<'a>(
         &mut self,
         context: &'a ParserContext<'a>,
@@ -527,6 +751,7 @@ impl GoogleSheetWireBuilder {
 
         Ok(())
     }
+
     async fn parse_motion_detectors<'a>(
         &mut self,
         context: &'a ParserContext<'a>,
@@ -599,6 +824,7 @@ impl GoogleSheetWireBuilder {
         }
         Ok(())
     }
+
     async fn parse_lights<'a>(
         &mut self,
         context: &'a ParserContext<'a>,
@@ -887,6 +1113,7 @@ impl GoogleSheetWireBuilder {
 
         Ok(())
     }
+
     async fn parse_buttons<'a>(
         &mut self,
         context: &'a ParserContext<'a>,
@@ -1050,6 +1277,29 @@ impl GoogleSheetWireBuilder {
     }
 }
 
+fn show_bool(value: bool) -> serde_json::Value {
+    if value {
+        "x".into()
+    } else {
+        "".into()
+    }
+}
+
+fn identify_device_type(device_type: u16) -> serde_json::Value {
+    match device_type {
+        MasterBrick::DEVICE_IDENTIFIER => "Master".into(),
+        DmxBricklet::DEVICE_IDENTIFIER => "DMX".into(),
+        MotionDetectorV2Bricklet::DEVICE_IDENTIFIER => "Motion Detector V2".into(),
+        Io16V2Bricklet::DEVICE_IDENTIFIER => "IO16 V2".into(),
+        Io16Bricklet::DEVICE_IDENTIFIER => "IO16 V1".into(),
+        IndustrialQuadRelayV2Bricklet::DEVICE_IDENTIFIER => "Quad Relay V2".into(),
+        Lcd128x64Bricklet::DEVICE_IDENTIFIER => "LCD 128x64".into(),
+        TemperatureV2Bricklet::DEVICE_IDENTIFIER => "Temperature V2".into(),
+        IsolatorBricklet::DEVICE_IDENTIFIER => "Isolator".into(),
+        other => other.into(),
+    }
+}
+
 trait DeviceIdxAccessNew<'a> {
     fn id_cell<'b>(&'b mut self) -> &'b mut DeviceIdxCell<'a>;
 }
@@ -1112,9 +1362,10 @@ fn update_state_new<F: FnMut(ValueRange)>(
                     position,
                     hardware_version,
                     firmware_version,
+                    device_identifier: _,
                 }) = metadata
                 {
-                    format!("{state}, {timestamp}, {endpoint}; {connected_uid}, {position}, hw: {}, fw: {}", TinkerforgeVersion(hardware_version), TinkerforgeVersion(firmware_version))
+                    format!("{state}, {timestamp}, {endpoint}; {connected_uid}, {position}, hw: {}, fw: {}", TinkerforgeVersion(*hardware_version), TinkerforgeVersion(*firmware_version))
                 } else {
                     format!("{state}, {timestamp}, {endpoint}")
                 }
@@ -1126,9 +1377,10 @@ fn update_state_new<F: FnMut(ValueRange)>(
     }
 }
 
-struct TinkerforgeVersion<'a>(&'a [u8; 3]);
+#[derive(Ord, PartialOrd, Eq, PartialEq)]
+struct TinkerforgeVersion([u8; 3]);
 
-impl<'a> Display for TinkerforgeVersion<'a> {
+impl Display for TinkerforgeVersion {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}.{}.{}", self.0[0], self.0[1], self.0[2])
     }
@@ -1141,6 +1393,7 @@ struct GoogleTable<'a, const N: usize, const M: usize> {
     rows: IntoIter<(usize, Vec<CellData>)>,
     start_row: usize,
     start_column: usize,
+    next_new_row: usize,
 }
 
 impl<'a, const N: usize, const M: usize> Iterator for GoogleTable<'a, N, M> {
@@ -1185,6 +1438,34 @@ struct GoogleCellData<'a> {
 }
 
 impl GoogleCellData<'_> {
+    pub(crate) fn get_value(&self) -> Option<serde_json::Value> {
+        self.data
+            .as_ref()
+            .and_then(|d| d.effective_value.as_ref())
+            .and_then(|v| {
+                if let Some(bool) = v.bool_value {
+                    return Some(serde_json::Value::Bool(bool));
+                }
+                if let Some(number) = v.number_value {
+                    if number.is_sign_positive() {
+                        if number <= u64::MAX as f64
+                            && (number - (number as u64 as f64)).abs() < f64::EPSILON
+                        {
+                            return Some(serde_json::Value::Number((number as u64).into()));
+                        }
+                    } else if number >= i64::MIN as f64
+                        && (number - (number as i64 as f64)).abs() < f64::EPSILON
+                    {
+                        return Some(serde_json::Value::Number((number as i64).into()));
+                    }
+                    return serde_json::Number::from_f64(number).map(serde_json::Value::Number);
+                }
+                if let Some(text) = v.string_value.clone() {
+                    return Some(serde_json::Value::String(text));
+                }
+                None
+            })
+    }
     fn get_content(&self) -> Option<&str> {
         self.data
             .as_ref()
@@ -1265,6 +1546,7 @@ impl<'a, const N: usize, const M: usize> GoogleTable<'a, N, M> {
 
         let start_row = grid.start_row.unwrap_or_default() as usize;
         let start_column = grid.start_column.unwrap_or_default() as usize;
+        let end_row = start_row + grid.row_data.as_ref().map(Vec::len).unwrap_or_default();
         let mut rows: IntoIter<(usize, Vec<CellData>)> = grid
             .row_data
             .into_iter()
@@ -1310,7 +1592,62 @@ impl<'a, const N: usize, const M: usize> GoogleTable<'a, N, M> {
             rows,
             start_row,
             start_column,
+            next_new_row: end_row,
         })
+    }
+    fn append_row<F: FnMut(ValueRange)>(
+        &mut self,
+        row: ([serde_json::Value; N], [Box<[serde_json::Value]>; M]),
+        mut updater: F,
+    ) {
+        let (static_cols, dynamic_cols) = row;
+        for (value, col_idx) in static_cols
+            .into_iter()
+            .zip(self.fixed_column_indizes.iter().copied())
+        {
+            let coordinates = CellCoordinates {
+                row: self.next_new_row,
+                col: col_idx + self.start_column,
+            };
+            updater(ValueRange {
+                major_dimension: None,
+                range: Some(format!("{}!{}", self.sheet_name, coordinates)),
+                values: Some(vec![vec![value]]),
+            });
+        }
+        for (values, indizes) in dynamic_cols
+            .into_iter()
+            .zip(self.dynamic_column_indices.iter())
+        {
+            for (value, col_index) in values.into_vec().into_iter().zip(indizes.iter().copied()) {
+                let coordinates = CellCoordinates {
+                    row: self.next_new_row,
+                    col: col_index + self.start_column,
+                };
+                updater(ValueRange {
+                    major_dimension: None,
+                    range: Some(format!("{}!{}", self.sheet_name, coordinates)),
+                    values: Some(vec![vec![value]]),
+                });
+            }
+        }
+        self.next_new_row += 1;
+    }
+    fn clean_remaining_rows<F: FnMut(ValueRange)>(&mut self, mut updater: F) {
+        for (static_cols, dynamic_cols) in self.by_ref() {
+            for cell in static_cols {
+                if cell.get_content().filter(|f| !f.is_empty()).is_some() {
+                    updater(cell.override_cell(""));
+                }
+            }
+            for cells in dynamic_cols {
+                for cell in cells.iter() {
+                    if cell.get_content().filter(|f| !f.is_empty()).is_some() {
+                        updater(cell.override_cell(""));
+                    }
+                }
+            }
+        }
     }
 }
 

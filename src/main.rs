@@ -46,13 +46,7 @@ async fn health() -> &'static str {
     "Ok"
 }
 
-async fn register_handle(
-    running_threads: &mut HashMap<Uid, TestamentSender>,
-    uid: Uid,
-    abort_handle: TestamentSender,
-) {
-    running_threads.insert(uid, abort_handle);
-}
+
 
 #[actix_web::main]
 async fn main() -> Result<(), Box<dyn Error>> {

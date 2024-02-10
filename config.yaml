@@ -10,6 +10,7 @@ google-sheet:
     range: A:E
     address: IP-Address
     state: Status
+    place: Place
   light_templates:
     sheet: Templates
     range: A:D
@@ -86,3 +87,19 @@ google-sheet:
     temperature_sensor: Fühler
     ring_button: Taster
     state: Status
+  available_bricklets:
+    sheet: Verfügbare Geräte
+    range: A:M
+    endpoint: Endpoint
+    master_id: Master Brick
+    uid: Adresse
+    connector: Stecker
+    device_type: Typ
+    hardware_version: Hardware
+    firmware_version: Firmware
+    io_ports: IO Ports
+    motion_detectors: Bewegungsmelder
+    temp_sensor: Temparatur Sensor
+    display: Display
+    dmx_channels: DMX Kanäle
+    relays: Relays

@@ -1,7 +1,8 @@
-use std::{collections::HashMap, fmt::Debug, net::IpAddr, sync::Arc, time::Duration};
+use std::{clone, collections::HashMap, fmt::Debug, net::IpAddr, sync::Arc, time::Duration};
 
 use log::{error, info};
 use thiserror::Error;
+use tinkerforge_async::master_brick::MasterBrick;
 use tinkerforge_async::{
     base58::Base58,
     dmx_bricklet::DmxBricklet,
@@ -30,7 +31,6 @@ use crate::{
         screen_data_renderer::{show_debug_text, start_screen_thread},
         temperature::handle_temperature,
     },
-    register_handle,
     terminator::{TestamentReceiver, TestamentSender},
 };
 
@@ -60,6 +60,7 @@ fn do_activate_devices(
         ));
     }
 }
+
 pub fn activate_devices(
     tinkerforge: &Tinkerforge,
     event_registry: &EventRegistry,
@@ -93,12 +94,14 @@ pub fn activate_devices(
         );
     };
 }
+
 #[derive(Clone)]
 enum EnumerationListenerEvent {
     Packet(EnumerateResponse),
     Terminate,
     Ping,
 }
+
 #[derive(Error, Debug)]
 enum TfBridgeError {
     #[error("Error communicating to device: {0}")]
@@ -164,6 +167,7 @@ async fn run_enumeration_listener(
                                             position: paket.position,
                                             hardware_version: paket.hardware_version,
                                             firmware_version: paket.firmware_version,
+                                            device_identifier: paket.device_identifier,
                                         },
                                     })
                                     .await
@@ -385,4 +389,12 @@ fn start_enumeration_listener(
             .expect("Cannot send status update");
     });
     testament
+}
+
+async fn register_handle(
+    running_threads: &mut HashMap<Uid, TestamentSender>,
+    uid: Uid,
+    abort_handle: TestamentSender,
+) {
+    running_threads.insert(uid, abort_handle);
 }
