@@ -2475,9 +2475,9 @@ dependencies = [
 
 [[package]]
 name = "tinkerforge-async"
-version = "0.0.5"
+version = "0.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "356db8a7ef294d1bcec82d5652e546356519192235acbd96cf00d03ebf78aa69"
+checksum = "6fd61a23bee59ca9703368a310bfee89399994ec12e7714109270b902f3f2d53"
 dependencies = [
  "byteorder",
  "const-str",
@@ -2489,6 +2489,7 @@ dependencies = [
  "rand",
  "rand_chacha",
  "sha-1",
+ "socket2",
  "thiserror",
  "tokio",
  "tokio-stream",
