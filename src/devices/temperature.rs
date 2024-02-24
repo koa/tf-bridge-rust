@@ -59,7 +59,7 @@ async fn temperature_task(
         .await?;
     bricklet
         .set_temperature_callback_configuration(
-            500,
+            10000,
             true,
             TEMPERATURE_V2_BRICKLET_THRESHOLD_OPTION_OFF,
             20,

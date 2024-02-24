@@ -1,10 +1,10 @@
-use std::collections::hash_map::Entry;
-use std::collections::HashMap;
-use std::fmt::{Display, Formatter};
-use std::net::IpAddr;
-use std::time::SystemTime;
-
-use crate::data::Uid;
+use std::{
+    collections::{hash_map::Entry, HashMap},
+    fmt::{Display, Formatter},
+    net::IpAddr,
+    time::SystemTime,
+};
+use tinkerforge_async::base58::Uid;
 
 #[derive(Default, Debug)]
 pub struct State {

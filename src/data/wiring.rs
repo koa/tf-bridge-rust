@@ -2,13 +2,11 @@ use std::{collections::BTreeMap, net::IpAddr, time::Duration};
 
 use serde::{Deserialize, Serialize};
 use strum_macros::EnumIter;
+use tinkerforge_async::base58::Uid;
 
-use crate::data::{
-    registry::{
-        BrightnessKey, ClockKey, DualButtonKey, LightColorKey, SingleButtonKey, SwitchOutputKey,
-        TemperatureKey,
-    },
-    Uid,
+use crate::data::registry::{
+    BrightnessKey, ClockKey, DualButtonKey, LightColorKey, SingleButtonKey, SwitchOutputKey,
+    TemperatureKey,
 };
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]

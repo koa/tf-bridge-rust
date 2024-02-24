@@ -1,6 +1,4 @@
-use std::{
-    collections::HashMap, error::Error, fmt::Debug, fs::File, future::Future, time::Duration,
-};
+use std::{error::Error, fmt::Debug, fs::File, future::Future, time::Duration};
 
 use actix_web::{get, App, HttpServer};
 use actix_web_prometheus::PrometheusMetricsBuilder;
@@ -26,11 +24,10 @@ use crate::{
         settings::{Tinkerforge, CONFIG},
         state::{State, StateUpdateMessage},
         wiring::{Controllers, MotionDetector, Wiring},
-        Uid,
     },
     devices::activate_devices,
     snapshot::{read_snapshot, write_snapshot},
-    terminator::{AbortHandleTerminator, JoinHandleTerminator, TestamentSender},
+    terminator::{AbortHandleTerminator, JoinHandleTerminator},
 };
 
 mod controller;
@@ -45,8 +42,6 @@ mod util;
 async fn health() -> &'static str {
     "Ok"
 }
-
-
 
 #[actix_web::main]
 async fn main() -> Result<(), Box<dyn Error>> {

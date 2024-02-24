@@ -1,10 +1,9 @@
-use std::{clone, collections::HashMap, fmt::Debug, net::IpAddr, sync::Arc, time::Duration};
+use std::{collections::HashMap, fmt::Debug, net::IpAddr, sync::Arc, time::Duration};
 
 use log::{error, info};
 use thiserror::Error;
-use tinkerforge_async::master_brick::MasterBrick;
 use tinkerforge_async::{
-    base58::Base58,
+    base58::{Base58, Uid},
     dmx_bricklet::DmxBricklet,
     error::TinkerforgeError,
     industrial_quad_relay_v2_bricklet::IndustrialQuadRelayV2Bricklet,
@@ -21,7 +20,7 @@ use tokio_stream::{wrappers::IntervalStream, StreamExt};
 use crate::{
     data::{
         registry::EventRegistry, settings::Tinkerforge, state::BrickletMetadata,
-        state::StateUpdateMessage, wiring::TinkerforgeDevices, Uid,
+        state::StateUpdateMessage, wiring::TinkerforgeDevices,
     },
     devices::{
         dmx_handler::handle_dmx,
@@ -140,6 +139,7 @@ async fn run_enumeration_listener(
     while let Some(event) = stream.next().await {
         match event {
             EnumerationListenerEvent::Ping => {
+                info!("Ping: {}", addr.0);
                 ipcon.disconnect_probe().await?;
             }
             EnumerationListenerEvent::Packet(paket) => {
@@ -149,6 +149,10 @@ async fn run_enumeration_listener(
                             if let Ok(connected_uid) =
                                 paket.connected_uid.base58_to_u32().map(Into::<Uid>::into)
                             {
+                                if device_testaments.contains_key(&uid) {
+                                    info!("Repeat: {uid}, {:?}", paket.enumeration_type);
+                                    continue;
+                                }
                                 let (testament, testament_stream) = TestamentSender::create();
                                 testament_stream.update_on_terminate(
                                     StateUpdateMessage::BrickletDisconnected {
@@ -183,7 +187,7 @@ async fn run_enumeration_listener(
                                             &mut registered_devices,
                                             uid,
                                             start_screen_thread(
-                                                Lcd128x64Bricklet::new(uid.into(), ipcon.clone()),
+                                                Lcd128x64Bricklet::new(uid, ipcon.clone()),
                                                 event_registry.clone(),
                                                 *screen_settings,
                                             )
@@ -193,7 +197,7 @@ async fn run_enumeration_listener(
                                     } else {
                                         info!("Found unused LCD Device {} on {addr:?}", uid);
                                         if let Err(error) = show_debug_text(
-                                            Lcd128x64Bricklet::new(uid.into(), ipcon.clone()),
+                                            Lcd128x64Bricklet::new(uid, ipcon.clone()),
                                             &format!("UID: {uid}"),
                                         )
                                         .await
@@ -210,7 +214,7 @@ async fn run_enumeration_listener(
                                             &mut registered_devices,
                                             uid,
                                             handle_dmx(
-                                                DmxBricklet::new(uid.into(), ipcon.clone()),
+                                                DmxBricklet::new(uid, ipcon.clone()),
                                                 event_registry.clone(),
                                                 &settings.entries,
                                             )
@@ -229,7 +233,7 @@ async fn run_enumeration_listener(
                                             &mut registered_devices,
                                             uid,
                                             handle_io16(
-                                                Io16Bricklet::new(uid.into(), ipcon.clone()),
+                                                Io16Bricklet::new(uid, ipcon.clone()),
                                                 event_registry.clone(),
                                                 &settings.entries,
                                             )
@@ -248,7 +252,7 @@ async fn run_enumeration_listener(
                                             &mut registered_devices,
                                             uid,
                                             handle_io16_v2(
-                                                Io16V2Bricklet::new(uid.into(), ipcon.clone()),
+                                                Io16V2Bricklet::new(uid, ipcon.clone()),
                                                 event_registry.clone(),
                                                 &settings.entries,
                                             )
@@ -267,10 +271,7 @@ async fn run_enumeration_listener(
                                             &mut registered_devices,
                                             uid,
                                             handle_motion_detector(
-                                                MotionDetectorV2Bricklet::new(
-                                                    uid.into(),
-                                                    ipcon.clone(),
-                                                ),
+                                                MotionDetectorV2Bricklet::new(uid, ipcon.clone()),
                                                 event_registry.clone(),
                                                 settings.output,
                                             ),
@@ -288,10 +289,7 @@ async fn run_enumeration_listener(
                                             &mut registered_devices,
                                             uid,
                                             handle_temperature(
-                                                TemperatureV2Bricklet::new(
-                                                    uid.into(),
-                                                    ipcon.clone(),
-                                                ),
+                                                TemperatureV2Bricklet::new(uid, ipcon.clone()),
                                                 event_registry.clone(),
                                                 settings.output,
                                             ),

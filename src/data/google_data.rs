@@ -22,6 +22,7 @@ use google_sheets4::{
 use log::error;
 use serde::Deserialize;
 use thiserror::Error;
+use tinkerforge_async::base58::Uid;
 use tinkerforge_async::dmx_bricklet::DmxBricklet;
 use tinkerforge_async::industrial_quad_relay_v2_bricklet::IndustrialQuadRelayV2Bricklet;
 use tinkerforge_async::io16_bricklet::Io16Bricklet;
@@ -47,7 +48,7 @@ use crate::{
             Orientation, RelayChannelEntry, RelaySettings, RingController, ScreenSettings,
             TemperatureSettings, TinkerforgeDevices, Wiring,
         },
-        DeviceInRoom, Room, SubDeviceInRoom, Uid,
+        DeviceInRoom, Room, SubDeviceInRoom,
     },
     util::kelvin_2_mireds,
 };

@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use log::error;
+use log::{debug, error};
 use thiserror::Error;
 use tinkerforge_async::{
     base58::Base58Error,
@@ -35,6 +35,7 @@ pub fn handle_motion_detector(
     });
     tx
 }
+
 #[derive(Error, Debug)]
 enum MotionDetectorError {
     #[error("Tinkerforge error: {0}")]
@@ -46,11 +47,14 @@ enum MotionDetectorError {
     #[error("Cannot parse UID {0}")]
     Uid(#[from] Base58Error),
 }
+
+#[derive(Debug)]
 enum MotionDetectionEvent {
     MotionStarted,
     MotionEnded,
     Closed,
 }
+
 async fn motion_detector_task(
     mut bricklet: MotionDetectorV2Bricklet,
     event_registry: EventRegistry,
@@ -73,6 +77,7 @@ async fn motion_detector_task(
     let mut timer_handle = None::<JoinHandle<()>>;
 
     while let Some(event) = stream.next().await {
+        debug!("Motion event: {event:?}");
         match event {
             MotionDetectionEvent::MotionStarted => {
                 sender

@@ -2,14 +2,15 @@ server: {}
 tinkerforge:
   endpoints: #[]
     - address: 10.192.64.23
+    - address: 10.192.64.26
 google-sheet:
   key_file: sa-development.json
   spreadsheet_id: 1a2OKCYMOUxE7PfjLjPgvIAf7WY9Y6uTMiXkEKHLlDoo
   endpoints:
     sheet: Tinkerforge Endpoints
-    range: A:E
+    range: A:F
     address: IP-Address
-    state: Status
+    state: Status Dev
     place: Place
   light_templates:
     sheet: Templates
@@ -20,7 +21,7 @@ google-sheet:
     temperature_cold_column: Lichttemperatur Kalt
   light:
     sheet: Lichter
-    range: A:T
+    range: A:U
     room_id: Raum Nummer
     light_id: Id
     light_idx: Idx
@@ -37,7 +38,7 @@ google-sheet:
       - Bewegungsmelder 3
     touchscreen_whitebalance: Touchscreen Farbe
     touchscreen_brightness: Touchscreen Helligkeit
-    state: Status
+    state: Status Dev
   button_templates:
     sheet: Taster Modelle
     range: A:G
@@ -46,17 +47,17 @@ google-sheet:
     sub_devices: variants
   buttons:
     sheet: Taster
-    range: A:J
+    range: A:K
     room_id: Raum Nummer
     button_id: id
     button_idx: Idx
     button_type: Typ
     device_address: IO-16 Bricklet
     first_input_idx: Start-Position
-    state: Status
+    state: Status Dev
   room_controllers:
     sheet: Touchscreen / Temperaturfühler
-    range: A:N
+    range: A:P
     room_id: Raum Nummer
     controller_id: id
     controller_idx: Idx
@@ -66,19 +67,19 @@ google-sheet:
     enable_heat_control: Heizkreise
     enable_whitebalance_control: Farbe
     enable_brightness_control: Helligkeit
-    touchscreen_state: Status Touchscreen
-    temperature_state: Status Temperaturfühler
+    touchscreen_state: Status Touchscreen Dev
+    temperature_state: Status Temperaturfühler Dev
   motion_detectors:
     sheet: Bewegungsmelder
-    range: A:I
+    range: A:J
     room_id: Raum Nummer
     device_address: Adresse
     id: id
     idx: Idx
-    state: Status
+    state: Status Dev
   relays:
     sheet: Relay
-    range: A:L
+    range: A:M
     room_id: Raum Nummer
     id: id
     idx: Idx
@@ -86,9 +87,9 @@ google-sheet:
     device_channel: Position
     temperature_sensor: Fühler
     ring_button: Taster
-    state: Status
+    state: Status Dev
   available_bricklets:
-    sheet: Verfügbare Geräte
+    sheet: Verfügbare Geräte Dev
     range: A:M
     endpoint: Endpoint
     master_id: Master Brick

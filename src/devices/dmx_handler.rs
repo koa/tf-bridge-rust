@@ -142,6 +142,7 @@ enum DimmColorUpdate {
 }
 
 const DMX_PAKET_SIZE: u16 = 60;
+
 #[derive(Debug, Error)]
 enum DmxError {
     #[error("Tinkerforge Error: {0}")]
@@ -156,7 +157,9 @@ async fn dmx_loop<St: Stream<Item = DmxCommand> + Unpin>(
     mut bricklet: DmxBricklet,
     mut stream: St,
 ) -> Result<(), DmxError> {
-    bricklet.get_identity().await?;
+    bricklet
+        .set_frame_callback_config(false, false, false, false)
+        .await?;
     bricklet.set_dmx_mode(DMX_BRICKLET_DMX_MODE_MASTER).await?;
     let mut channel_values = [0u8; 480];
 
