@@ -14,7 +14,7 @@ sub-array = "0.1.1"
 bitmap-font = "0.3.0"
 embedded-graphics = "0.8.1"
 prometheus = "0.13.3"
-serde = { version = "1.0.196", features = ["derive"] }
+serde = { version = "1.0.197", features = ["derive"] }
 serde_yaml = "0.9.31"
 serde_json = "1"
 config = "0.14.0"
