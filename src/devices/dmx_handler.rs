@@ -13,10 +13,9 @@ use tokio::sync::mpsc;
 use tokio_stream::{Stream, StreamExt};
 use tokio_util::either::Either;
 
-use crate::terminator::LifeLineEnd;
 use crate::{
     data::{registry::EventRegistry, state::StateUpdateMessage, wiring::DmxConfigEntry},
-    terminator::TestamentSender,
+    terminator::LifeLineEnd,
 };
 
 pub async fn handle_dmx(
@@ -155,7 +154,7 @@ enum DmxError {
     Send(#[from] mpsc::error::SendError<StateUpdateMessage>),
 }
 
-async fn dmx_loop<St: Stream<Item = DmxCommand> + Unpin>(
+async fn dmx_loop<St: Stream<Item=DmxCommand> + Unpin>(
     mut bricklet: DmxBricklet,
     mut stream: St,
 ) -> Result<(), DmxError> {

@@ -7,31 +7,31 @@ edition = "2021"
 
 [dependencies]
 chrono = "0.4.34"
-tinkerforge-async = { version = "0.0.6", features = ["prometheus", "serde"], registry = "kellnr-berg-turbenthal" }
-tokio = { version = "1.36.0", features = ["fs", "macros"] }
-tokio-stream = { version = "0.1.14", features = ["time", "sync"] }
-sub-array = "0.1.1"
-bitmap-font = "0.3.0"
-embedded-graphics = "0.8.1"
-prometheus = "0.13.3"
-serde = { version = "1.0.196", features = ["derive"] }
-serde_yaml = "0.9.31"
-serde_json = "1"
-config = "0.14.0"
-lazy_static = "1.4.0"
-actix-web = "4.5.1"
-actix-web-prometheus = { version = "0.1.2", features = ["process"] }
-env_logger = "0.11.1"
+tinkerforge-async = { version = "2.0", features = ["prometheus", "serde"], registry = "kellnr-berg-turbenthal" }
+tokio = { version = "1.36", features = ["fs", "macros"] }
+tokio-stream = { version = "0.1", features = ["time", "sync"] }
+sub-array = "0.1"
+bitmap-font = "0.3"
+embedded-graphics = "0.8"
+prometheus = "0.13"
+serde = { version = "1.0", features = ["derive"] }
+serde_yaml = "0.9"
+serde_json = "1.0"
+config = "0.14"
+lazy_static = "1.4"
+actix-web = "4.5"
+actix-web-prometheus = { version = "0.1", features = ["process"] }
+env_logger = "0.11"
 log = "0.4"
-strum_macros = "0.26.1"
-strum = "0.26.1"
+strum_macros = "0.26"
+strum = "0.26"
 simple-layout = "0.0.2"
-thiserror = "1.0.57"
-tokio-util = "0.7.10"
-futures = "0.3.30"
-google-sheets4 = "5.0.3"
-ron = "0.8.1"
+thiserror = "1.0"
+tokio-util = "0.7"
+futures = "0.3"
+google-sheets4 = "5.0"
+ron = "0.8"
 
 [build-dependencies]
-image = "0.24.8"
-anyhow = "1.0.75"
+image = "0.25"
+anyhow = "1.0"

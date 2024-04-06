@@ -10,13 +10,12 @@ use tinkerforge_async::{
 use tokio::sync::mpsc;
 use tokio_stream::StreamExt;
 
-use crate::terminator::LifeLineEnd;
 use crate::{
     data::{
         registry::{EventRegistry, TemperatureKey},
         state::StateUpdateMessage,
     },
-    terminator::{TestamentReceiver, TestamentSender},
+    terminator::LifeLineEnd,
 };
 
 pub fn handle_temperature(

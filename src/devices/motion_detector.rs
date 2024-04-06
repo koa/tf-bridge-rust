@@ -6,16 +6,13 @@ use tinkerforge_async::{
     base58::Base58Error, error::TinkerforgeError, motion_detector_v_2::MotionDetectorV2Bricklet,
 };
 use tokio::{sync::mpsc, task::JoinHandle, time::sleep};
-use tokio_stream::{wrappers::ReceiverStream, StreamExt};
+use tokio_stream::{StreamExt, wrappers::ReceiverStream};
 
-use crate::terminator::LifeLineEnd;
-use crate::{
-    data::{
-        registry::{ButtonState, EventRegistry, SingleButtonKey, SingleButtonLayout},
-        state::StateUpdateMessage,
-    },
-    terminator::{TestamentReceiver, TestamentSender},
+use crate::data::{
+    registry::{ButtonState, EventRegistry, SingleButtonKey, SingleButtonLayout},
+    state::StateUpdateMessage,
 };
+use crate::terminator::LifeLineEnd;
 
 pub fn handle_motion_detector(
     bricklet: MotionDetectorV2Bricklet,

@@ -1,8 +1,8 @@
-use std::time::Duration;
 use std::{
     marker::PhantomData,
     num::Saturating,
     ops::{Add, Sub},
+    time::Duration,
 };
 
 use chrono::{DateTime, Local, Timelike};
@@ -18,22 +18,38 @@ use embedded_graphics::{
 };
 use log::{error, info};
 use simple_layout::prelude::{
-    bordered, center, expand, horizontal_layout, optional_placement, owned_text, padding, scale,
-    vertical_layout, DashedLine, Layoutable, RoundedLine,
+    bordered, center, DashedLine, expand, horizontal_layout, Layoutable, optional_placement, owned_text,
+    padding, RoundedLine, scale, vertical_layout,
 };
 use thiserror::Error;
-use tinkerforge_async::common::comcu_bricklet::ComcuBricklet;
-use tinkerforge_async::lcd_128_x_64::TouchPositionCallback;
 use tinkerforge_async::{
-    base58::Base58Error, error::TinkerforgeError, lcd_128_x_64::Lcd128X64Bricklet,
+    base58::Base58Error,
+    error::TinkerforgeError,
+    lcd_128_x_64::{
+        Lcd128X64Bricklet,
+        TouchPositionCallback,
+    },
 };
-use tokio::time::{interval, Interval};
-use tokio::{join, sync::mpsc, task::JoinHandle, time::sleep};
-use tokio_stream::wrappers::IntervalStream;
-use tokio_stream::{empty, wrappers::ReceiverStream, StreamExt, StreamNotifyClose};
+use tokio::{
+    join,
+    sync::mpsc,
+    task::JoinHandle,
+    time::{
+        interval,
+        sleep,
+    },
+};
+use tokio_stream::{
+    empty,
+    StreamExt,
+    StreamNotifyClose,
+    wrappers::{
+        IntervalStream,
+        ReceiverStream,
+    },
+};
 use tokio_util::either::Either;
 
-use crate::terminator::LifeLineEnd;
 use crate::{
     data::{
         registry::EventRegistry,
@@ -42,9 +58,9 @@ use crate::{
     },
     devices::display::Lcd128x64BrickletDisplay,
     icons,
-    terminator::{TestamentReceiver, TestamentSender},
     util,
 };
+use crate::terminator::LifeLineEnd;
 
 const TEXT_STYLE: MonoTextStyle<BinaryColor> = MonoTextStyle::new(&FONT_6X12, BinaryColor::On);
 const BIG_TEXT_STYLE: MonoTextStyle<BinaryColor> = MonoTextStyle::new(&FONT_10X20, BinaryColor::On);
@@ -62,7 +78,7 @@ pub struct ScreenData<
 }
 
 impl<LT: Layoutable<BinaryColor>, LWB: Layoutable<BinaryColor>, LBR: Layoutable<BinaryColor>>
-    ScreenData<LT, LWB, LBR>
+ScreenData<LT, LWB, LBR>
 {
     pub fn set_current_time(&mut self, time: DateTime<Local>) {
         self.current_time = time;
@@ -87,7 +103,7 @@ impl<LT: Layoutable<BinaryColor>, LWB: Layoutable<BinaryColor>, LBR: Layoutable<
     }
     pub fn draw<DrawError>(
         &mut self,
-        target: &mut impl DrawTarget<Color = BinaryColor, Error = DrawError>,
+        target: &mut impl DrawTarget<Color=BinaryColor, Error=DrawError>,
     ) -> Result<(), DrawError> {
         let rectangle = target.bounding_box();
         let clock = if self.current_time.second() % 2 == 0 {
@@ -95,7 +111,7 @@ impl<LT: Layoutable<BinaryColor>, LWB: Layoutable<BinaryColor>, LBR: Layoutable<
         } else {
             self.current_time.format("%H %M")
         }
-        .to_string();
+            .to_string();
         //let clock = self.current_time.format("%H:%M").to_string();
         let clock_text = Text::new(&clock, Point::zero(), TEXT_STYLE);
         let temperature_element = self
@@ -124,8 +140,8 @@ impl<LT: Layoutable<BinaryColor>, LWB: Layoutable<BinaryColor>, LBR: Layoutable<
                 ),
                 1,
             )
-            .append(vertical_layout(whitebalance, 1).append(brightness, 1), 1)
-            .draw_placed(target, rectangle)?;
+                .append(vertical_layout(whitebalance, 1).append(brightness, 1), 1)
+                .draw_placed(target, rectangle)?;
         } else {
             vertical_layout(center(clock_text), 0)
                 .append(measured_temperature, 2)
@@ -164,10 +180,10 @@ pub enum AdjustEvent {
 }
 
 struct AdjustableValue<V, L, C>
-where
-    V: Copy + Add<Output = V> + Sub<Output = V> + PartialOrd,
-    L: Layoutable<C> + ?Sized,
-    C: PixelColor,
+    where
+        V: Copy + Add<Output=V> + Sub<Output=V> + PartialOrd,
+        L: Layoutable<C> + ?Sized,
+        C: PixelColor,
 {
     current_value: V,
     max_value: V,
@@ -180,9 +196,9 @@ where
 }
 
 impl<V, L> AdjustableValue<V, L, BinaryColor>
-where
-    V: Copy + Add<Output = V> + Sub<Output = V> + PartialOrd,
-    L: Layoutable<BinaryColor>,
+    where
+        V: Copy + Add<Output=V> + Sub<Output=V> + PartialOrd,
+        L: Layoutable<BinaryColor>,
 {
     pub fn element(&mut self) -> impl Layoutable<BinaryColor> + '_ {
         show_adjustable_value(
@@ -272,7 +288,7 @@ pub fn screen_data(
                     padding(center(Image::new(&icons::COLOR, Point::zero())), 1, 1, 1, 1),
                     1,
                 )
-                .append(scale(value, BinaryColor::On), 0)
+                    .append(scale(value, BinaryColor::On), 0)
             },
             plus_button: None,
             minus_button: None,
@@ -299,7 +315,7 @@ pub fn screen_data(
                     ),
                     1,
                 )
-                .append(scale(value, BinaryColor::On), 0)
+                    .append(scale(value, BinaryColor::On), 0)
             },
             plus_button: None,
             minus_button: None,
@@ -350,17 +366,17 @@ fn show_adjustable_value<'a, L: Layoutable<BinaryColor> + 'a>(
             )),
             0,
         )
-        .append(data_visualization, 1)
-        .append(
-            center(optional_placement(
-                plus_button,
-                bordered(
-                    padding(Text::new("+", Point::zero(), TEXT_STYLE), -2, 1, -1, 1),
-                    RoundedLine::new(BinaryColor::On),
-                ),
-            )),
-            0,
-        ),
+            .append(data_visualization, 1)
+            .append(
+                center(optional_placement(
+                    plus_button,
+                    bordered(
+                        padding(Text::new("+", Point::zero(), TEXT_STYLE), -2, 1, -1, 1),
+                        RoundedLine::new(BinaryColor::On),
+                    ),
+                )),
+                0,
+            ),
     ))
 }
 
@@ -503,11 +519,11 @@ async fn screen_thread_loop(
     let mut message_stream = StreamNotifyClose::new(display.input_stream().await?)
         .map(|event| match event {
             Some(TouchPositionCallback {
-                pressure: _pressure,
-                x,
-                y,
-                age: _age,
-            }) => ScreenMessage::Touched(Point {
+                     pressure: _pressure,
+                     x,
+                     y,
+                     age: _age,
+                 }) => ScreenMessage::Touched(Point {
                 x: x as i32,
                 y: y as i32,
             }),

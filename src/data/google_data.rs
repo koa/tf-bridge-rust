@@ -16,10 +16,10 @@ use google_sheets4::{
     api::{BatchUpdateValuesRequest, CellData, SpreadsheetMethods, ValueRange},
     hyper::{Client, client::HttpConnector},
     hyper_rustls::{self, HttpsConnector},
-    oauth2::{authenticator::Authenticator, ServiceAccountAuthenticator},
+    oauth2::ServiceAccountAuthenticator,
     Sheets,
 };
-use log::{error, info};
+use log::{debug, error, info};
 use serde::Deserialize;
 use thiserror::Error;
 use tinkerforge_async::{base58::Uid, DeviceIdentifier, ip_connection::Version};
@@ -87,8 +87,7 @@ struct ParserContext<'a> {
 pub async fn read_sheet_data(state: Option<&State>) -> Result<Option<Wiring>, GoogleDataError> {
     Ok(if let Some(config) = &CONFIG.google_sheet {
         let secret = config.read_secret().await?;
-        let auth: Authenticator<HttpsConnector<HttpConnector>> =
-            ServiceAccountAuthenticator::builder(secret).build().await?;
+        let auth = ServiceAccountAuthenticator::builder(secret).build().await?;
 
         let connector_builder = hyper_rustls::HttpsConnectorBuilder::new();
 
@@ -97,7 +96,7 @@ pub async fn read_sheet_data(state: Option<&State>) -> Result<Option<Wiring>, Go
                 .with_native_roots()
                 .https_or_http()
                 .enable_http1()
-                .enable_http2()
+                //.enable_http2()
                 .build(),
         );
 
@@ -337,7 +336,7 @@ impl GoogleSheetWireBuilder {
                             .filter(|value| !value.is_null() && value.as_str() != Some(""))
                             != cell.get_value().as_ref()
                         {
-                            info!(
+                            debug!(
                                 "Update {}: {:?}->{:?}",
                                 cell.coordinates,
                                 cell.get_value().as_ref(),
