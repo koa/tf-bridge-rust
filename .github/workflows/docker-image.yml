@@ -41,8 +41,7 @@ jobs:
         with:
           context: .
           push: ${{ github.event_name != 'pull_request' }}
-          tags: |
-            type=sha,suffix=-x86
+          tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           file: Dockerfile.x86
           platforms: linux/amd64
@@ -51,8 +50,7 @@ jobs:
         with:
           context: .
           push: ${{ github.event_name != 'pull_request' }}
-          tags: |
-            type=sha,suffix=-arm
+          tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           file: Dockerfile.arm
           platforms: linux/amd64
