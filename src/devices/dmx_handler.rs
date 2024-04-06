@@ -6,13 +6,14 @@ use sub_array::SubArray;
 use thiserror::Error;
 use tinkerforge_async::{
     base58::Base58Error,
-    dmx_bricklet::{DmxBricklet, DMX_BRICKLET_DMX_MODE_MASTER},
+    dmx::{DmxBricklet, DmxMode, SetFrameCallbackConfigRequest, WriteFrameLowLevelRequest},
     error::TinkerforgeError,
 };
 use tokio::sync::mpsc;
 use tokio_stream::{Stream, StreamExt};
 use tokio_util::either::Either;
 
+use crate::terminator::LifeLineEnd;
 use crate::{
     data::{registry::EventRegistry, state::StateUpdateMessage, wiring::DmxConfigEntry},
     terminator::TestamentSender,
@@ -22,8 +23,8 @@ pub async fn handle_dmx(
     bricklet: DmxBricklet,
     event_registry: EventRegistry,
     config: &[DmxConfigEntry],
-) -> TestamentSender {
-    let (tx, rx) = TestamentSender::create();
+) -> LifeLineEnd {
+    let (end1, end2) = LifeLineEnd::create();
     let mut streams = SelectAll::new();
     for config_entry in config.iter().cloned() {
         streams.push(match config_entry {
@@ -88,7 +89,7 @@ pub async fn handle_dmx(
             }
         });
     }
-    let events = streams.merge(rx.send_on_terminate(DmxCommand::Exit));
+    let events = streams.merge(end2.send_on_terminate(DmxCommand::Exit));
 
     tokio::spawn(async move {
         match dmx_loop(bricklet, events).await {
@@ -99,8 +100,9 @@ pub async fn handle_dmx(
                 info!("DmxBricklet done");
             }
         }
+        drop(end2);
     });
-    tx
+    end1
 }
 
 enum DmxCommand {
@@ -158,9 +160,15 @@ async fn dmx_loop<St: Stream<Item = DmxCommand> + Unpin>(
     mut stream: St,
 ) -> Result<(), DmxError> {
     bricklet
-        .set_frame_callback_config(false, false, false, false)
+        .set_frame_callback_config(SetFrameCallbackConfigRequest {
+            frame_started_callback_enabled: false,
+            frame_available_callback_enabled: false,
+            frame_callback_enabled: false,
+            frame_error_count_callback_enabled: false,
+        })
         .await?;
-    bricklet.set_dmx_mode(DMX_BRICKLET_DMX_MODE_MASTER).await?;
+    bricklet.set_dmx_mode(DmxMode::Master).await?;
+
     let mut channel_values = [0u8; 480];
 
     while let Some(event) = stream.next().await {
@@ -174,11 +182,11 @@ async fn dmx_loop<St: Stream<Item = DmxCommand> + Unpin>(
                     *entry = value;
                     let offset = channel - (channel % DMX_PAKET_SIZE);
                     bricklet
-                        .write_frame_low_level(
-                            DMX_PAKET_SIZE,
-                            offset,
-                            channel_values.sub_array_ref(offset as usize),
-                        )
+                        .write_frame_low_level(WriteFrameLowLevelRequest {
+                            frame_length: DMX_PAKET_SIZE,
+                            frame_chunk_offset: offset,
+                            frame_chunk_data: *channel_values.sub_array_ref(offset as usize),
+                        })
                         .await?;
                 }
             }
@@ -220,11 +228,11 @@ async fn dmx_loop<St: Stream<Item = DmxCommand> + Unpin>(
                     Some((channel, None)) => {
                         let offset = channel - (channel % DMX_PAKET_SIZE);
                         bricklet
-                            .write_frame_low_level(
-                                DMX_PAKET_SIZE,
-                                offset,
-                                channel_values.sub_array_ref(offset as usize),
-                            )
+                            .write_frame_low_level(WriteFrameLowLevelRequest {
+                                frame_length: DMX_PAKET_SIZE,
+                                frame_chunk_offset: offset,
+                                frame_chunk_data: *channel_values.sub_array_ref(offset as usize),
+                            })
                             .await?;
                     }
                     Some((lower_channel, Some(upper_channel))) => {
@@ -232,28 +240,31 @@ async fn dmx_loop<St: Stream<Item = DmxCommand> + Unpin>(
                         if span < DMX_PAKET_SIZE {
                             let offset = (Saturating(upper_channel) - Saturating(DMX_PAKET_SIZE)).0;
                             bricklet
-                                .write_frame_low_level(
-                                    DMX_PAKET_SIZE,
-                                    offset,
-                                    channel_values.sub_array_ref(offset as usize),
-                                )
+                                .write_frame_low_level(WriteFrameLowLevelRequest {
+                                    frame_length: DMX_PAKET_SIZE,
+                                    frame_chunk_offset: offset,
+                                    frame_chunk_data: *channel_values
+                                        .sub_array_ref(offset as usize),
+                                })
                                 .await?;
                         } else {
                             let offset = lower_channel - (lower_channel % DMX_PAKET_SIZE);
                             bricklet
-                                .write_frame_low_level(
-                                    DMX_PAKET_SIZE,
-                                    offset,
-                                    channel_values.sub_array_ref(offset as usize),
-                                )
+                                .write_frame_low_level(WriteFrameLowLevelRequest {
+                                    frame_length: DMX_PAKET_SIZE,
+                                    frame_chunk_offset: offset,
+                                    frame_chunk_data: *channel_values
+                                        .sub_array_ref(offset as usize),
+                                })
                                 .await?;
                             let offset = upper_channel - (upper_channel % DMX_PAKET_SIZE);
                             bricklet
-                                .write_frame_low_level(
-                                    DMX_PAKET_SIZE,
-                                    offset,
-                                    channel_values.sub_array_ref(offset as usize),
-                                )
+                                .write_frame_low_level(WriteFrameLowLevelRequest {
+                                    frame_length: DMX_PAKET_SIZE,
+                                    frame_chunk_offset: offset,
+                                    frame_chunk_data: *channel_values
+                                        .sub_array_ref(offset as usize),
+                                })
                                 .await?;
                         }
                     }

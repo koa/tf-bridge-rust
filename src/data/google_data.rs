@@ -1,54 +1,44 @@
-use std::borrow::Cow;
-use std::time::SystemTime;
 use std::{
     array,
+    borrow::Cow,
     collections::{BTreeMap, HashMap, HashSet},
     fmt::{Debug, Display, Formatter, Write},
     io,
     net::IpAddr,
     str::FromStr,
     time::Duration,
+    time::SystemTime,
     vec::IntoIter,
 };
 
 use chrono::{DateTime, Local};
 use google_sheets4::{
     api::{BatchUpdateValuesRequest, CellData, SpreadsheetMethods, ValueRange},
-    hyper::{client::HttpConnector, Client},
+    hyper::{Client, client::HttpConnector},
     hyper_rustls::{self, HttpsConnector},
     oauth2::{authenticator::Authenticator, ServiceAccountAuthenticator},
     Sheets,
 };
-use log::error;
+use log::{error, info};
 use serde::Deserialize;
 use thiserror::Error;
-use tinkerforge_async::base58::Uid;
-use tinkerforge_async::dmx_bricklet::DmxBricklet;
-use tinkerforge_async::industrial_quad_relay_v2_bricklet::IndustrialQuadRelayV2Bricklet;
-use tinkerforge_async::io16_bricklet::Io16Bricklet;
-use tinkerforge_async::io16_v2_bricklet::Io16V2Bricklet;
-use tinkerforge_async::isolator_bricklet::IsolatorBricklet;
-use tinkerforge_async::lcd_128x64_bricklet::Lcd128x64Bricklet;
-use tinkerforge_async::master_brick::MasterBrick;
-use tinkerforge_async::motion_detector_v2_bricklet::MotionDetectorV2Bricklet;
-use tinkerforge_async::temperature_v2_bricklet::TemperatureV2Bricklet;
+use tinkerforge_async::{base58::Uid, DeviceIdentifier, ip_connection::Version};
 
-use crate::data::state::ConnectionState;
 use crate::{
     data::{
+        DeviceInRoom,
         registry::{
             BrightnessKey, ClockKey, DualButtonKey, LightColorKey, SingleButtonKey,
             SwitchOutputKey, TemperatureKey,
         },
-        settings::{GoogleError, GoogleSheet, CONFIG},
-        state::{BrickletConnectionData, BrickletMetadata, State},
-        wiring::{
+        Room,
+        settings::{CONFIG, GoogleError, GoogleSheet},
+        state::{BrickletConnectionData, BrickletMetadata, ConnectionState, State}, SubDeviceInRoom, wiring::{
             ButtonSetting, Controllers, DmxConfigEntry, DmxSettings, DualInputDimmer,
             DualInputSwitch, HeatController, IoSettings, MotionDetector, MotionDetectorSettings,
             Orientation, RelayChannelEntry, RelaySettings, RingController, ScreenSettings,
             TemperatureSettings, TinkerforgeDevices, Wiring,
         },
-        DeviceInRoom, Room, SubDeviceInRoom,
     },
     util::kelvin_2_mireds,
 };
@@ -178,6 +168,7 @@ impl GoogleSheetWireBuilder {
         context: &'a ParserContext<'a>,
     ) -> Result<(), GoogleDataError> {
         if let Some(state) = context.state {
+            info!("Update available bricklets");
             let config = context.config.available_bricklets();
             let mut output_table = GoogleTable::connect(
                 &context.spreadsheet_methods,
@@ -190,8 +181,8 @@ impl GoogleSheetWireBuilder {
                     config.hardware_version(),
                     config.firmware_version(),
                     config.io_ports(),
-                    config.motion_detectors(),
                     config.temp_sensor(),
+                    config.motion_detectors(),
                     config.display(),
                     config.dmx_channels(),
                     config.relays(),
@@ -201,16 +192,16 @@ impl GoogleSheetWireBuilder {
                 config.sheet(),
                 config.range(),
             )
-            .await?;
+                .await?;
             #[derive(Ord, PartialOrd, Eq, PartialEq)]
             struct BrickletRow {
                 endpoint_addr: IpAddr,
                 master_idx: Option<u8>,
                 connector: char,
                 uid: Uid,
-                device_type: u16,
-                hardware_version: TinkerforgeVersion,
-                firmware_version: TinkerforgeVersion,
+                device_type: DeviceIdentifier,
+                hardware_version: Version,
+                firmware_version: Version,
                 state: ConnectionState,
                 last_change: SystemTime,
             }
@@ -226,13 +217,13 @@ impl GoogleSheetWireBuilder {
                              ..
                          }| {
                             match *device_identifier {
-                                MasterBrick::DEVICE_IDENTIFIER => Some((
+                                DeviceIdentifier::MasterBrick => Some((
                                     *uid,
                                     Connection::Master {
                                         position: *position as u8 - b'0',
                                     },
                                 )),
-                                IsolatorBricklet::DEVICE_IDENTIFIER => Some((
+                                DeviceIdentifier::IsolatorBricklet => Some((
                                     *uid,
                                     Connection::Isolator {
                                         parent: *connected_uid,
@@ -251,14 +242,17 @@ impl GoogleSheetWireBuilder {
                 .iter()
                 .filter_map(
                     |(
-                        uid,
-                        BrickletConnectionData {
-                            state,
-                            last_change,
-                            endpoint,
-                            metadata,
-                        },
-                    )| {
+                         uid,
+                         BrickletConnectionData {
+                             state,
+                             last_change,
+                             endpoint,
+                             metadata,
+                         },
+                     )| {
+                        if state != &ConnectionState::Connected {
+                            return None;
+                        }
                         metadata.as_ref().map(
                             |BrickletMetadata {
                                  connected_uid,
@@ -278,8 +272,8 @@ impl GoogleSheetWireBuilder {
                                     connector,
                                     uid: *uid,
                                     device_type: *device_identifier,
-                                    hardware_version: TinkerforgeVersion(*hardware_version),
-                                    firmware_version: TinkerforgeVersion(*firmware_version),
+                                    hardware_version: *hardware_version,
+                                    firmware_version: *firmware_version,
                                     state: *state,
                                     last_change: *last_change,
                                 }
@@ -339,7 +333,16 @@ impl GoogleSheetWireBuilder {
             for data_row in rows {
                 if let Some((table_row, _)) = output_table.next() {
                     for (cell, value) in table_row.iter().zip(data_row.into_iter()) {
-                        if Some(&value) != cell.get_value().as_ref() {
+                        if Some(&value)
+                            .filter(|value| !value.is_null() && value.as_str() != Some(""))
+                            != cell.get_value().as_ref()
+                        {
+                            info!(
+                                "Update {}: {:?}->{:?}",
+                                cell.coordinates,
+                                cell.get_value().as_ref(),
+                                value
+                            );
                             self.updates.push(cell.override_cell(value));
                         }
                     }
@@ -360,8 +363,8 @@ impl GoogleSheetWireBuilder {
         let (master_idx, connector) = match master_positions.get(&connected_uid) {
             None => (None, position),
             Some(Connection::Master {
-                position: master_position,
-            }) => (Some(*master_position), position),
+                     position: master_position,
+                 }) => (Some(*master_position), position),
             Some(Connection::Isolator { parent, position }) => {
                 Self::find_connection(master_positions, *parent, *position)
             }
@@ -409,14 +412,14 @@ impl GoogleSheetWireBuilder {
             endpoints_config.sheet(),
             endpoints_config.range(),
         )
-        .await?
-        .filter_map(|([address, state, place], _)| {
-            address
-                .get_content()
-                .map(IpAddr::from_str)
-                .and_then(Result::ok)
-                .map(|ip| (ip, state, place.get_content().unwrap_or_default().into()))
-        }) {
+            .await?
+            .filter_map(|([address, state, place], _)| {
+                address
+                    .get_content()
+                    .map(IpAddr::from_str)
+                    .and_then(Result::ok)
+                    .map(|ip| (ip, state, place.get_content().unwrap_or_default().into()))
+            }) {
             self.endpoints.push(address);
             self.endpoint_names.insert(address, place);
             if let Some(update) = context
@@ -526,37 +529,37 @@ impl GoogleSheetWireBuilder {
             relay_configs.sheet(),
             relay_configs.range(),
         )
-        .await?
-        .filter_map(
-            |([room, idx, address, channel, sensor, button, state], _)| {
-                if let (Some(room), Some(address), Some(channel)) = (
-                    room.get_content().map(Room::from_str).and_then(Result::ok),
-                    address
-                        .get_content()
-                        .map(Uid::from_str)
-                        .and_then(Result::ok),
-                    channel.get_integer().map(|v| v as u8),
-                ) {
-                    Some((
-                        room,
-                        DeviceIdxCell(idx),
-                        address,
-                        channel,
-                        sensor
+            .await?
+            .filter_map(
+                |([room, idx, address, channel, sensor, button, state], _)| {
+                    if let (Some(room), Some(address), Some(channel)) = (
+                        room.get_content().map(Room::from_str).and_then(Result::ok),
+                        address
                             .get_content()
-                            .and_then(|k| self.heat_outputs_addresses.get(k))
-                            .copied(),
-                        button
-                            .get_content()
-                            .and_then(|k| self.single_button_adresses.get(k))
-                            .copied(),
-                        state,
-                    ))
-                } else {
-                    None
-                }
-            },
-        ) {
+                            .map(Uid::from_str)
+                            .and_then(Result::ok),
+                        channel.get_integer().map(|v| v as u8),
+                    ) {
+                        Some((
+                            room,
+                            DeviceIdxCell(idx),
+                            address,
+                            channel,
+                            sensor
+                                .get_content()
+                                .and_then(|k| self.heat_outputs_addresses.get(k))
+                                .copied(),
+                            button
+                                .get_content()
+                                .and_then(|k| self.single_button_adresses.get(k))
+                                .copied(),
+                            state,
+                        ))
+                    } else {
+                        None
+                    }
+                },
+            ) {
             if let Some(temp_input) = temperature {
                 relay_channels
                     .entry(uid)
@@ -785,21 +788,21 @@ impl GoogleSheetWireBuilder {
             md_config.sheet(),
             md_config.range(),
         )
-        .await?
-        .filter_map(|([room, address, id, idx, state], _)| {
-            if let (Some(room), Some(address), Some(id)) = (
-                room.get_content().map(Room::from_str).and_then(Result::ok),
-                address
-                    .get_content()
-                    .map(Uid::from_str)
-                    .and_then(Result::ok),
-                id.get_content().map(Into::<Box<str>>::into),
-            ) {
-                Some((room, address, id, DeviceIdxCell(idx), state))
-            } else {
-                None
-            }
-        }) {
+            .await?
+            .filter_map(|([room, address, id, idx, state], _)| {
+                if let (Some(room), Some(address), Some(id)) = (
+                    room.get_content().map(Room::from_str).and_then(Result::ok),
+                    address
+                        .get_content()
+                        .map(Uid::from_str)
+                        .and_then(Result::ok),
+                    id.get_content().map(Into::<Box<str>>::into),
+                ) {
+                    Some((room, address, id, DeviceIdxCell(idx), state))
+                } else {
+                    None
+                }
+            }) {
             device_ids_of_rooms
                 .entry(room)
                 .or_default()
@@ -845,7 +848,7 @@ impl GoogleSheetWireBuilder {
             light_templates.sheet(),
             light_templates.range(),
         )
-        .await?
+            .await?
         {
             if let (Some(name), Some(discriminator)) = (
                 name.get_content().map(Into::<Box<str>>::into),
@@ -918,7 +921,7 @@ impl GoogleSheetWireBuilder {
             light_config.sheet(),
             light_config.range(),
         )
-        .await?
+            .await?
         {
             if let (
                 Some(room),
@@ -1133,7 +1136,7 @@ impl GoogleSheetWireBuilder {
             button_templates.sheet(),
             button_templates.range(),
         )
-        .await?
+            .await?
         {
             if let (Some(name), Some(sub_devices), Some(discriminator)) = (
                 name.get_content().map(<&str>::into),
@@ -1191,7 +1194,7 @@ impl GoogleSheetWireBuilder {
             button_config.sheet(),
             button_config.range(),
         )
-        .await?
+            .await?
         {
             if let (
                 Some(room),
@@ -1241,7 +1244,7 @@ impl GoogleSheetWireBuilder {
                 .or_default();
             let mut current_input_idx = button_row.first_input_idx;
             for (subdevice_id, subdevice_name) in
-                button_row.button_template.sub_devices.iter().enumerate()
+            button_row.button_template.sub_devices.iter().enumerate()
             {
                 let device_key = format!("{}, {}", button_row.button_id, subdevice_name);
 
@@ -1286,19 +1289,8 @@ fn show_bool(value: bool) -> serde_json::Value {
     }
 }
 
-fn identify_device_type(device_type: u16) -> serde_json::Value {
-    match device_type {
-        MasterBrick::DEVICE_IDENTIFIER => "Master".into(),
-        DmxBricklet::DEVICE_IDENTIFIER => "DMX".into(),
-        MotionDetectorV2Bricklet::DEVICE_IDENTIFIER => "Motion Detector V2".into(),
-        Io16V2Bricklet::DEVICE_IDENTIFIER => "IO16 V2".into(),
-        Io16Bricklet::DEVICE_IDENTIFIER => "IO16 V1".into(),
-        IndustrialQuadRelayV2Bricklet::DEVICE_IDENTIFIER => "Quad Relay V2".into(),
-        Lcd128x64Bricklet::DEVICE_IDENTIFIER => "LCD 128x64".into(),
-        TemperatureV2Bricklet::DEVICE_IDENTIFIER => "Temperature V2".into(),
-        IsolatorBricklet::DEVICE_IDENTIFIER => "Isolator".into(),
-        other => other.into(),
-    }
+fn identify_device_type(device_type: DeviceIdentifier) -> serde_json::Value {
+    device_type.name().into()
 }
 
 trait DeviceIdxAccessNew<'a> {
@@ -1359,14 +1351,14 @@ fn update_state_new<F: FnMut(ValueRange)>(
             }) => {
                 let timestamp = DateTime::<Local>::from(last_change);
                 if let Some(BrickletMetadata {
-                    connected_uid,
-                    position,
-                    hardware_version,
-                    firmware_version,
-                    device_identifier: _,
-                }) = metadata
+                                connected_uid,
+                                position,
+                                hardware_version,
+                                firmware_version,
+                                device_identifier: _,
+                            }) = metadata
                 {
-                    format!("{state}, {timestamp}, {endpoint}; {connected_uid}, {position}, hw: {}, fw: {}", TinkerforgeVersion(*hardware_version), TinkerforgeVersion(*firmware_version))
+                    format!("{state}, {timestamp}, {endpoint}; {connected_uid}, {position}, hw: {}, fw: {}", hardware_version, firmware_version)
                 } else {
                     format!("{state}, {timestamp}, {endpoint}")
                 }
@@ -1495,10 +1487,14 @@ impl GoogleCellData<'_> {
         }
     }
     fn override_cell(&self, value: impl Into<serde_json::Value>) -> ValueRange {
+        let mut json_value = value.into();
+        if json_value.is_null() {
+            json_value = serde_json::Value::String("".to_string());
+        }
         ValueRange {
             major_dimension: None,
             range: Some(format!("{}!{}", self.sheet, self.coordinates)),
-            values: Some(vec![vec![value.into()]]),
+            values: Some(vec![vec![json_value]]),
         }
     }
 }
@@ -1752,7 +1748,7 @@ mod test {
     use env_logger::Env;
     use log::{error, info};
 
-    use crate::data::google_data::{read_sheet_data, CellCoordinates};
+    use crate::data::google_data::{CellCoordinates, read_sheet_data};
 
     #[test]
     fn format_coordinates() {

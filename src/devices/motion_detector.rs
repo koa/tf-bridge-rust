@@ -3,15 +3,12 @@ use std::time::Duration;
 use log::{debug, error};
 use thiserror::Error;
 use tinkerforge_async::{
-    base58::Base58Error,
-    error::TinkerforgeError,
-    motion_detector_v2_bricklet::{
-        MotionDetectorV2Bricklet, MOTION_DETECTOR_V2_BRICKLET_STATUS_LED_CONFIG_OFF,
-    },
+    base58::Base58Error, error::TinkerforgeError, motion_detector_v_2::MotionDetectorV2Bricklet,
 };
 use tokio::{sync::mpsc, task::JoinHandle, time::sleep};
 use tokio_stream::{wrappers::ReceiverStream, StreamExt};
 
+use crate::terminator::LifeLineEnd;
 use crate::{
     data::{
         registry::{ButtonState, EventRegistry, SingleButtonKey, SingleButtonLayout},
@@ -24,16 +21,16 @@ pub fn handle_motion_detector(
     bricklet: MotionDetectorV2Bricklet,
     event_registry: EventRegistry,
     single_button_key: SingleButtonKey,
-) -> TestamentSender {
-    let (tx, rx) = TestamentSender::create();
+) -> LifeLineEnd {
+    let (foreign_end, my_end) = LifeLineEnd::create();
     tokio::spawn(async move {
         if let Err(error) =
-            motion_detector_task(bricklet, event_registry, single_button_key, rx).await
+            motion_detector_task(bricklet, event_registry, single_button_key, my_end).await
         {
             error!("Error processing motion detection: {error}");
         }
     });
-    tx
+    foreign_end
 }
 
 #[derive(Error, Debug)]
@@ -59,17 +56,15 @@ async fn motion_detector_task(
     mut bricklet: MotionDetectorV2Bricklet,
     event_registry: EventRegistry,
     single_button_key: SingleButtonKey,
-    termination_receiver: TestamentReceiver,
+    termination_receiver: LifeLineEnd,
 ) -> Result<(), MotionDetectorError> {
     bricklet.set_sensitivity(100).await?;
-    bricklet
-        .set_status_led_config(MOTION_DETECTOR_V2_BRICKLET_STATUS_LED_CONFIG_OFF)
-        .await?;
     let (tx, rx) = mpsc::channel(2);
 
     let sender = event_registry.single_button_sender(single_button_key).await;
+
     let mut stream = bricklet
-        .get_motion_detected_callback_receiver()
+        .motion_detected_stream()
         .await
         .map(|_| MotionDetectionEvent::MotionStarted)
         .merge(termination_receiver.send_on_terminate(MotionDetectionEvent::Closed))
@@ -99,5 +94,6 @@ async fn motion_detector_task(
             MotionDetectionEvent::Closed => break,
         }
     }
+    drop(termination_receiver);
     Ok(())
 }

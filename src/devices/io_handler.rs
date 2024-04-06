@@ -10,8 +10,8 @@ use thiserror::Error;
 use tinkerforge_async::{
     base58::Base58Error,
     error::TinkerforgeError,
-    io16_bricklet::{InterruptEvent, Io16Bricklet},
-    io16_v2_bricklet::{Io16V2Bricklet, IO16_V2_BRICKLET_STATUS_LED_CONFIG_OFF},
+    io_16::{InterruptCallback, Io16Bricklet, SetPortInterruptRequest},
+    io_16_v_2::{Io16V2Bricklet, SetInputValueCallbackConfigurationRequest},
 };
 use tokio::{sync::mpsc, task::JoinHandle, time::sleep};
 use tokio_stream::{empty, wrappers::ReceiverStream, StreamExt};
@@ -23,18 +23,18 @@ use crate::{
         state::StateUpdateMessage,
         wiring::ButtonSetting,
     },
-    terminator::{TestamentReceiver, TestamentSender},
+    terminator::{LifeLineEnd, TestamentReceiver, TestamentSender},
 };
 
 pub async fn handle_io16(
     bricklet: Io16Bricklet,
     event_registry: EventRegistry,
     buttons: &[ButtonSetting],
-) -> TestamentSender {
-    let (tx, rx) = TestamentSender::create();
+) -> LifeLineEnd {
+    let (foreign_end, my_end) = LifeLineEnd::create();
     let channel_settings = collect_16_channel_settings(event_registry, buttons).await;
     tokio::spawn(async move {
-        let result = io_16_v1_loop(bricklet, rx, channel_settings).await;
+        let result = io_16_v1_loop(bricklet, my_end, channel_settings).await;
         match result {
             Err(error) => {
                 error!("Cannot communicate with Io16V2Bricklet: {error}");
@@ -44,7 +44,7 @@ pub async fn handle_io16(
             }
         }
     });
-    tx
+    foreign_end
 }
 
 async fn collect_16_channel_settings(
@@ -129,15 +129,25 @@ impl Iterator for ByteMaskIterator {
 
 async fn io_16_v1_loop(
     mut bricklet: Io16Bricklet,
-    rx: TestamentReceiver,
+    rx: LifeLineEnd,
     channel_settings: [ChannelSetting; 16],
 ) -> Result<(), IoHandlerError> {
     bricklet.set_debounce_period(30).await?;
-    bricklet.set_port_interrupt('a', 0xff).await?;
-    bricklet.set_port_interrupt('b', 0xff).await?;
+    bricklet
+        .set_port_interrupt(SetPortInterruptRequest {
+            port: 'a',
+            interrupt_mask: 0xff,
+        })
+        .await?;
+    bricklet
+        .set_port_interrupt(SetPortInterruptRequest {
+            port: 'b',
+            interrupt_mask: 0xff,
+        })
+        .await?;
     let button_event_stream = futures::StreamExt::flat_map(
-        bricklet.get_interrupt_callback_receiver().await,
-        move |InterruptEvent {
+        bricklet.interrupt_stream().await,
+        move |InterruptCallback {
                   port,
                   interrupt_mask,
                   value_mask,
@@ -165,11 +175,11 @@ pub async fn handle_io16_v2(
     bricklet: Io16V2Bricklet,
     event_registry: EventRegistry,
     buttons: &[ButtonSetting],
-) -> TestamentSender {
-    let (tx, rx) = TestamentSender::create();
+) -> LifeLineEnd {
+    let (foreign_end, my_end) = LifeLineEnd::create();
     let channel_settings = collect_16_channel_settings(event_registry, buttons).await;
     tokio::spawn(async move {
-        match io_16_v2_loop(bricklet, rx, channel_settings).await {
+        match io_16_v2_loop(bricklet, my_end, channel_settings).await {
             Err(error) => {
                 error!("Cannot communicate with Io16V2Bricklet: {error}");
             }
@@ -178,7 +188,7 @@ pub async fn handle_io16_v2(
             }
         }
     });
-    tx
+    foreign_end
 }
 
 #[derive(Debug, PartialEq)]
@@ -188,6 +198,7 @@ enum IoMessage {
     LongPress(u8),
     Release(u8),
 }
+
 #[derive(Clone, Default)]
 enum ChannelSetting {
     #[default]
@@ -199,33 +210,33 @@ enum ChannelSetting {
 
 async fn io_16_v2_loop(
     mut bricklet: Io16V2Bricklet,
-    termination_receiver: TestamentReceiver,
+    termination_receiver: LifeLineEnd,
     channel_settings: [ChannelSetting; 16],
 ) -> Result<(), IoHandlerError> {
     for i in 0..16 {
+        info!("Prepare channel {i}");
         bricklet
-            .set_input_value_callback_configuration(i, 20, true)
+            .set_input_value_callback_configuration(SetInputValueCallbackConfigurationRequest {
+                channel: i,
+                period: 20,
+                value_has_to_change: true,
+            })
             .await?;
     }
-    let button_event_stream = bricklet
-        .get_input_value_callback_receiver()
-        .await
-        .map(|event| {
-            if !event.value {
-                IoMessage::Press(event.channel)
-            } else {
-                IoMessage::Release(event.channel)
-            }
-        });
-    bricklet
-        .set_status_led_config(IO16_V2_BRICKLET_STATUS_LED_CONFIG_OFF)
-        .await?;
+    info!("Channels prepared");
+    let button_event_stream = bricklet.input_value_stream().await.map(|event| {
+        if !event.value {
+            IoMessage::Press(event.channel)
+        } else {
+            IoMessage::Release(event.channel)
+        }
+    });
     io_16_loop(termination_receiver, channel_settings, button_event_stream).await?;
     Ok(())
 }
 
 async fn io_16_loop(
-    termination_receiver: TestamentReceiver,
+    termination_receiver: LifeLineEnd,
     channel_settings: [ChannelSetting; 16],
     button_event_stream: impl Stream<Item = IoMessage> + Sized + Unpin,
 ) -> Result<(), IoHandlerError> {
@@ -330,6 +341,7 @@ async fn io_16_loop(
             }
         };
     }
+    drop(rx);
     Ok(())
 }
 

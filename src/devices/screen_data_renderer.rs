@@ -1,3 +1,4 @@
+use std::time::Duration;
 use std::{
     marker::PhantomData,
     num::Saturating,
@@ -21,17 +22,18 @@ use simple_layout::prelude::{
     vertical_layout, DashedLine, Layoutable, RoundedLine,
 };
 use thiserror::Error;
+use tinkerforge_async::common::comcu_bricklet::ComcuBricklet;
+use tinkerforge_async::lcd_128_x_64::TouchPositionCallback;
 use tinkerforge_async::{
-    base58::Base58Error,
-    error::TinkerforgeError,
-    lcd_128x64_bricklet::{
-        Lcd128x64Bricklet, TouchPositionEvent, LCD_128X64_BRICKLET_STATUS_LED_CONFIG_OFF,
-    },
+    base58::Base58Error, error::TinkerforgeError, lcd_128_x_64::Lcd128X64Bricklet,
 };
+use tokio::time::{interval, Interval};
 use tokio::{join, sync::mpsc, task::JoinHandle, time::sleep};
+use tokio_stream::wrappers::IntervalStream;
 use tokio_stream::{empty, wrappers::ReceiverStream, StreamExt, StreamNotifyClose};
 use tokio_util::either::Either;
 
+use crate::terminator::LifeLineEnd;
 use crate::{
     data::{
         registry::EventRegistry,
@@ -153,12 +155,14 @@ impl<LT: Layoutable<BinaryColor>, LWB: Layoutable<BinaryColor>, LBR: Layoutable<
             })
     }
 }
+
 #[derive(Debug, Clone, Copy)]
 pub enum AdjustEvent {
     Whitebalance(Adjustment<Saturating<u16>>),
     Brightness(Adjustment<Saturating<u8>>),
     Temperature(Adjustment<f32>),
 }
+
 struct AdjustableValue<V, L, C>
 where
     V: Copy + Add<Output = V> + Sub<Output = V> + PartialOrd,
@@ -215,6 +219,7 @@ where
         }
     }
 }
+
 #[derive(Debug, Clone, Copy)]
 pub struct Adjustment<V> {
     #[allow(unused)]
@@ -360,11 +365,11 @@ fn show_adjustable_value<'a, L: Layoutable<BinaryColor> + 'a>(
 }
 
 pub async fn start_screen_thread(
-    bricklet: Lcd128x64Bricklet,
+    bricklet: Lcd128X64Bricklet,
     event_registry: EventRegistry,
     settings: ScreenSettings,
-) -> TestamentSender {
-    let (testament, final_stream) = TestamentSender::create();
+) -> LifeLineEnd {
+    let (testament, final_stream) = LifeLineEnd::create();
     tokio::spawn(async move {
         match screen_thread_loop(bricklet, event_registry, final_stream, settings).await {
             Ok(()) => {
@@ -393,6 +398,7 @@ pub enum ScreenDataError {
     #[error("Cannot parse UID {0}")]
     Uid(#[from] Base58Error),
 }
+
 enum ScreenMessage {
     Touched(Point),
     LocalTime(DateTime<Local>),
@@ -402,10 +408,11 @@ enum ScreenMessage {
     UpdateTemperature(f32),
     UpdateLightColor(Saturating<u16>),
     UpdateBrightness(Saturating<u8>),
+    PollCounters,
 }
 
 pub async fn show_debug_text(
-    bricklet: Lcd128x64Bricklet,
+    bricklet: Lcd128X64Bricklet,
     text: &str,
 ) -> Result<(), ScreenDataError> {
     let mut display = Lcd128x64BrickletDisplay::new(bricklet, Orientation::Straight).await?;
@@ -422,9 +429,9 @@ pub async fn show_debug_text(
 }
 
 async fn screen_thread_loop(
-    mut bricklet: Lcd128x64Bricklet,
+    bricklet: Lcd128X64Bricklet,
     event_registry: EventRegistry,
-    termination_receiver: TestamentReceiver,
+    termination_receiver: LifeLineEnd,
     settings: ScreenSettings,
 ) -> Result<(), ScreenDataError> {
     let ScreenSettings {
@@ -435,9 +442,7 @@ async fn screen_thread_loop(
         light_color_key,
         brightness_key,
     } = settings;
-    bricklet
-        .set_status_led_config(LCD_128X64_BRICKLET_STATUS_LED_CONFIG_OFF)
-        .await?;
+    let uid = bricklet.uid();
     let mut display = Lcd128x64BrickletDisplay::new(bricklet, orientation).await?;
     display.set_backlight(0).await?;
     let (tx, rx) = mpsc::channel(2);
@@ -497,7 +502,7 @@ async fn screen_thread_loop(
 
     let mut message_stream = StreamNotifyClose::new(display.input_stream().await?)
         .map(|event| match event {
-            Some(TouchPositionEvent {
+            Some(TouchPositionCallback {
                 pressure: _pressure,
                 x,
                 y,
@@ -518,6 +523,10 @@ async fn screen_thread_loop(
             termination_receiver
                 .send_on_terminate(ScreenMessage::Closed)
                 .map(|_| ScreenMessage::Closed),
+        )
+        .merge(
+            IntervalStream::new(interval(Duration::from_secs(30)))
+                .map(|_| ScreenMessage::PollCounters),
         );
 
     let mut dimm_timer_handle = None::<JoinHandle<()>>;
@@ -586,6 +595,10 @@ async fn screen_thread_loop(
             }
             ScreenMessage::UpdateLightColor(color) => screen.set_whitebalance(color.0),
             ScreenMessage::UpdateBrightness(brightness) => screen.set_brightness(brightness.0),
+            ScreenMessage::PollCounters => {
+                let counter = display.bricklet_mut().get_spitfp_error_count().await?;
+                info!("Counters {uid}: {counter:?}");
+            }
         };
         display.clear();
         screen.draw(&mut display).expect("will not happen");
@@ -598,5 +611,6 @@ async fn screen_thread_loop(
             info!("Write time: {:?}", duration);
         }*/
     }
+    drop(termination_receiver);
     Ok(())
 }

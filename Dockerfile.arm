@@ -1,9 +1,10 @@
-FROM ghcr.io/koa/rust-cross-compile:0.0.1 as rust
+FROM ghcr.io/koa/rust-cross-compile:0.0.2 as rust
 ADD . /build/
 WORKDIR /build
-RUN cargo build --release --target armv7-unknown-linux-musleabihf
+RUN apt -y install python3-dev
+RUN cargo build --release --target arm-unknown-linux-musleabihf
 FROM scratch as target
 COPY --from=rust /etc/ssl /etc/ssl
-COPY --from=rust /build/target/armv7-unknown-linux-musleabihf/release/tf_bridge_rust /
+COPY --from=rust /build/target/arm-unknown-linux-musleabihf/release/tf_bridge_rust /
 EXPOSE 8080/tcp
 ENTRYPOINT ["/tf_bridge_rust"]

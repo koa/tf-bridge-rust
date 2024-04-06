@@ -3,7 +3,7 @@ use log::error;
 use thiserror::Error;
 use tinkerforge_async::{
     base58::Base58Error, error::TinkerforgeError,
-    industrial_quad_relay_v2_bricklet::IndustrialQuadRelayV2Bricklet,
+    industrial_quad_relay_v_2::IndustrialQuadRelayV2Bricklet,
 };
 use tokio::{
     sync::mpsc::{self, Sender},
@@ -12,6 +12,7 @@ use tokio::{
 };
 use tokio_stream::{wrappers::ReceiverStream, StreamExt};
 
+use crate::terminator::LifeLineEnd;
 use crate::{
     data::{registry::EventRegistry, state::StateUpdateMessage, wiring::RelayChannelEntry},
     terminator::TestamentSender,
@@ -21,8 +22,8 @@ pub async fn handle_quad_relay(
     bricklet: IndustrialQuadRelayV2Bricklet,
     event_registry: &EventRegistry,
     inputs: &[RelayChannelEntry],
-) -> TestamentSender {
-    let (tx, rx) = TestamentSender::create();
+) -> LifeLineEnd {
+    let (tx, rx) = LifeLineEnd::create();
     let mut streams = SelectAll::new();
     for channel_entry in inputs {
         let channel = channel_entry.channel;
@@ -38,14 +39,17 @@ pub async fn handle_quad_relay(
         if let Err(error) = quad_relay_task(bricklet, input_streams).await {
             error!("Error processing relay: {error}");
         }
+        drop(rx);
     });
     tx
 }
+
 enum RelayMsg {
     SetState(u8, bool),
     UpdateState,
     Closed,
 }
+
 #[derive(Debug, Error)]
 enum RelayError {
     #[error("Tinkerforge error: {0}")]
@@ -55,6 +59,7 @@ enum RelayError {
     #[error("Cannot parse UID {0}")]
     Uid(#[from] Base58Error),
 }
+
 async fn quad_relay_task(
     mut bricklet: IndustrialQuadRelayV2Bricklet,
     input_stream: impl Stream<Item = RelayMsg> + Unpin,
@@ -77,7 +82,7 @@ async fn quad_relay_task(
             }
             RelayMsg::Closed => {}
             RelayMsg::UpdateState => {
-                bricklet.set_value(&current_value).await?;
+                bricklet.set_value(current_value).await?;
             }
         }
     }

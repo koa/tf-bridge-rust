@@ -6,12 +6,11 @@ use embedded_graphics::{
 };
 use strum_macros::EnumIter;
 use sub_array::SubArray;
-use tinkerforge_async::{
-    error::TinkerforgeError,
-    lcd_128x64_bricklet::{
-        Lcd128x64Bricklet, TouchPositionEvent, LCD_128X64_BRICKLET_STATUS_LED_CONFIG_OFF,
-        LCD_128X64_BRICKLET_TOUCH_LED_CONFIG_OFF, LCD_128X64_BRICKLET_TOUCH_LED_CONFIG_ON,
-    },
+use tinkerforge_async::error::TinkerforgeError;
+use tinkerforge_async::lcd_128_x_64::{
+    Lcd128X64Bricklet, SetDisplayConfigurationRequest,
+    SetTouchPositionCallbackConfigurationRequest, TouchLedConfig, TouchPositionCallback,
+    WritePixelsLowLevelRequest,
 };
 use tokio_stream::{Stream, StreamExt};
 
@@ -23,7 +22,7 @@ const DISPLAY_HEIGHT: usize = 64;
 const TOTAL_PIXEL_COUNT: usize = DISPLAY_WIDTH * DISPLAY_HEIGHT;
 
 pub struct Lcd128x64BrickletDisplay {
-    bricklet: Lcd128x64Bricklet,
+    bricklet: Lcd128X64Bricklet,
     current_image: [bool; TOTAL_PIXEL_COUNT],
     pending_image: BooleanImage<DISPLAY_WIDTH, TOTAL_PIXEL_COUNT>,
     orientation: Orientation,
@@ -55,17 +54,20 @@ impl DrawTarget for Lcd128x64BrickletDisplay {
 
 impl Lcd128x64BrickletDisplay {
     pub async fn new(
-        mut bricklet: Lcd128x64Bricklet,
+        mut bricklet: Lcd128X64Bricklet,
         orientation: Orientation,
     ) -> Result<Self, TinkerforgeError> {
         bricklet.clear_display().await?;
-        bricklet
-            .set_status_led_config(LCD_128X64_BRICKLET_STATUS_LED_CONFIG_OFF)
-            .await?;
+        bricklet.set_touch_led_config(TouchLedConfig::Off).await?;
         let contrast = 14;
         let backlight = 100;
         bricklet
-            .set_display_configuration(contrast, backlight, false, false)
+            .set_display_configuration(SetDisplayConfigurationRequest {
+                contrast,
+                backlight,
+                invert: false,
+                automatic_draw: false,
+            })
             .await?;
         Ok(Self {
             bricklet,
@@ -78,7 +80,7 @@ impl Lcd128x64BrickletDisplay {
     }
     pub async fn draw(&mut self) -> Result<(), TinkerforgeError> {
         self.bricklet
-            .set_touch_led_config(LCD_128X64_BRICKLET_TOUCH_LED_CONFIG_ON)
+            .set_touch_led_config(TouchLedConfig::Off)
             .await?;
         let mut current_pos = 0;
         let pixel_count = self.current_image.len();
@@ -99,15 +101,15 @@ impl Lcd128x64BrickletDisplay {
                 let until_offset = current_pos as u16 + PIXEL_PER_PAKET;
                 let data_chunk = self.pending_image.data.sub_array_ref(current_pos);
                 self.bricklet
-                    .write_pixels_low_level(
-                        0,
-                        0,
-                        127,
-                        63,
-                        until_offset,
-                        current_pos as u16,
-                        data_chunk,
-                    )
+                    .write_pixels_low_level(WritePixelsLowLevelRequest {
+                        x_start: 0,
+                        y_start: 0,
+                        x_end: 127,
+                        y_end: 63,
+                        pixels_length: until_offset,
+                        pixels_chunk_offset: current_pos as u16,
+                        pixels_chunk_data: *data_chunk,
+                    })
                     .await?;
                 self.current_image[current_pos..current_pos + PIXEL_PER_PAKET as usize]
                     .copy_from_slice(data_chunk);
@@ -116,15 +118,15 @@ impl Lcd128x64BrickletDisplay {
                 let data_chunk = &self.pending_image.data[current_pos..TOTAL_PIXEL_COUNT];
                 temp_array[0..remaining_pixels].copy_from_slice(data_chunk);
                 self.bricklet
-                    .write_pixels_low_level(
-                        0,
-                        0,
-                        127,
-                        63,
-                        TOTAL_PIXEL_COUNT as u16,
-                        current_pos as u16,
-                        &temp_array,
-                    )
+                    .write_pixels_low_level(WritePixelsLowLevelRequest {
+                        x_start: 0,
+                        y_start: 0,
+                        x_end: 127,
+                        y_end: 63,
+                        pixels_length: TOTAL_PIXEL_COUNT as u16,
+                        pixels_chunk_offset: current_pos as u16,
+                        pixels_chunk_data: temp_array,
+                    })
                     .await?;
                 self.current_image[current_pos..TOTAL_PIXEL_COUNT].copy_from_slice(data_chunk);
             }
@@ -132,7 +134,7 @@ impl Lcd128x64BrickletDisplay {
         }
         self.bricklet.draw_buffered_frame(false).await?;
         self.bricklet
-            .set_touch_led_config(LCD_128X64_BRICKLET_TOUCH_LED_CONFIG_OFF)
+            .set_touch_led_config(TouchLedConfig::Off)
             .await?;
 
         Ok(())
@@ -142,48 +144,58 @@ impl Lcd128x64BrickletDisplay {
     }
     pub async fn input_stream(
         &mut self,
-    ) -> Result<impl Stream<Item = TouchPositionEvent>, TinkerforgeError> {
+    ) -> Result<impl Stream<Item = TouchPositionCallback>, TinkerforgeError> {
         self.bricklet
-            .set_touch_position_callback_configuration(200, true)
+            .set_touch_position_callback_configuration(
+                SetTouchPositionCallbackConfigurationRequest {
+                    period: 200,
+                    value_has_to_change: true,
+                },
+            )
             .await?;
         let orientation = self.orientation;
 
-        Ok(self
-            .bricklet
-            .get_touch_position_callback_receiver()
-            .await
-            .map(
-                move |TouchPositionEvent {
-                          pressure,
-                          x,
-                          y,
-                          age,
-                      }| {
-                    let Point { x, y } = translate_reverse(
-                        &orientation,
-                        Point {
-                            x: x as i32,
-                            y: y as i32,
-                        },
-                    );
-                    TouchPositionEvent {
-                        pressure,
-                        x: x as u16,
-                        y: y as u16,
-                        age,
-                    }
-                },
-            ))
+        Ok(self.bricklet.touch_position_stream().await.map(
+            move |TouchPositionCallback {
+                      pressure,
+                      x,
+                      y,
+                      age,
+                  }| {
+                let Point { x, y } = translate_reverse(
+                    &orientation,
+                    Point {
+                        x: x as i32,
+                        y: y as i32,
+                    },
+                );
+                TouchPositionCallback {
+                    pressure,
+                    x: x as u16,
+                    y: y as u16,
+                    age,
+                }
+            },
+        ))
     }
     pub async fn set_backlight(&mut self, value: u8) -> Result<(), TinkerforgeError> {
         if self.backlight == value {
             return Ok(());
         }
         self.bricklet
-            .set_display_configuration(self.contrast, value, false, false)
+            .set_display_configuration(SetDisplayConfigurationRequest {
+                contrast: self.contrast,
+                backlight: value,
+                invert: false,
+                automatic_draw: false,
+            })
             .await?;
         self.backlight = value;
         Ok(())
+    }
+
+    pub fn bricklet_mut(&mut self) -> &mut Lcd128X64Bricklet {
+        &mut self.bricklet
     }
 }
 
@@ -263,6 +275,7 @@ fn translate_point(orientation: &Orientation, p: Point) -> Point {
         },
     }
 }
+
 fn translate_reverse(orientation: &Orientation, p: Point) -> Point {
     match orientation {
         Orientation::Straight => p,
@@ -288,6 +301,7 @@ pub fn format(orientation: &Orientation) -> OrientationFormat {
         Orientation::LeftDown | Orientation::RightDown => OrientationFormat::Portrait,
     }
 }
+
 fn translate_bbox(orientation: &Orientation, bbox: Rectangle) -> Rectangle {
     match format(orientation) {
         OrientationFormat::Landscape => bbox,
@@ -300,6 +314,7 @@ fn translate_bbox(orientation: &Orientation, bbox: Rectangle) -> Rectangle {
         },
     }
 }
+
 impl Orientation {}
 
 #[cfg(test)]

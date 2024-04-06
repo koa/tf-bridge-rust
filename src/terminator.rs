@@ -1,3 +1,6 @@
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+
 use log::info;
 use tokio::{
     sync::{mpsc, watch},
@@ -6,8 +9,15 @@ use tokio::{
 use tokio_stream::{wrappers::WatchStream, Stream, StreamExt};
 
 pub struct TestamentSender(Option<watch::Sender<Option<()>>>);
+
 #[derive(Clone)]
 pub struct TestamentReceiver(watch::Receiver<Option<()>>);
+
+pub struct LifeLineEnd {
+    sender: TestamentSender,
+    receiver: TestamentReceiver,
+    is_alive: Arc<AtomicBool>,
+}
 
 impl TestamentReceiver {
     pub fn update_on_terminate<R: Send + 'static>(mut self, message: R, sender: mpsc::Sender<R>) {
@@ -41,6 +51,41 @@ impl Drop for TestamentSender {
                 info!("Error on cleanup: {error}, ignoring");
             }
         }
+    }
+}
+
+impl LifeLineEnd {
+    pub fn create() -> (LifeLineEnd, LifeLineEnd) {
+        let (tx1, rx1) = TestamentSender::create();
+        let (tx2, rx2) = TestamentSender::create();
+        (
+            Self::create_single_end(tx1, rx2),
+            Self::create_single_end(tx2, rx1),
+        )
+    }
+
+    fn create_single_end(tx: TestamentSender, rx: TestamentReceiver) -> LifeLineEnd {
+        let is_alive = Arc::new(AtomicBool::new(true));
+        let mut receiver = rx.clone().send_on_terminate(());
+        let is_alive_writer = is_alive.clone();
+        tokio::spawn(async move {
+            receiver.next().await;
+            is_alive_writer.store(false, Ordering::Relaxed);
+        });
+        LifeLineEnd {
+            sender: tx,
+            receiver: rx,
+            is_alive,
+        }
+    }
+    pub fn is_alive(&self) -> bool {
+        self.is_alive.load(Ordering::Relaxed)
+    }
+    pub fn send_on_terminate<R>(&self, value: R) -> impl Stream<Item = R> + Unpin {
+        self.receiver.clone().send_on_terminate(value)
+    }
+    pub fn update_on_terminate<R: Send + 'static>(&self, message: R, sender: mpsc::Sender<R>) {
+        self.receiver.clone().update_on_terminate(message, sender);
     }
 }
 

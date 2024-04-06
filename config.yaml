@@ -1,8 +1,9 @@
-server: {}
+server: { }
 tinkerforge:
   endpoints: #[]
     - address: 10.192.64.23
     - address: 10.192.64.26
+    - address: 127.0.0.1
 google-sheet:
   key_file: sa-development.json
   spreadsheet_id: 1a2OKCYMOUxE7PfjLjPgvIAf7WY9Y6uTMiXkEKHLlDoo

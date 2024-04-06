@@ -4,7 +4,10 @@ use std::{
     net::IpAddr,
     time::SystemTime,
 };
+
 use tinkerforge_async::base58::Uid;
+use tinkerforge_async::DeviceIdentifier;
+use tinkerforge_async::ip_connection::Version;
 
 #[derive(Default, Debug)]
 pub struct State {
@@ -47,13 +50,13 @@ pub struct BrickletConnectionData {
     pub metadata: Option<BrickletMetadata>,
 }
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, PartialEq)]
 pub struct BrickletMetadata {
     pub connected_uid: Uid,
     pub position: char,
-    pub hardware_version: [u8; 3],
-    pub firmware_version: [u8; 3],
-    pub device_identifier: u16,
+    pub hardware_version: Version,
+    pub firmware_version: Version,
+    pub device_identifier: DeviceIdentifier,
 }
 
 #[derive(Debug, Eq, PartialEq, Copy, Clone, Ord, PartialOrd)]
@@ -104,7 +107,11 @@ impl State {
                 metadata,
             } => match self.bricklets.entry(uid) {
                 Entry::Occupied(mut existing_entry) => {
-                    if existing_entry.get().state != ConnectionState::Connected {
+                    let entry_ref = existing_entry.get();
+                    if entry_ref.state != ConnectionState::Connected
+                        || entry_ref.metadata.as_ref() != Some(&metadata)
+                        || entry_ref.endpoint != endpoint
+                    {
                         existing_entry.insert(BrickletConnectionData {
                             state: ConnectionState::Connected,
                             last_change: SystemTime::now(),

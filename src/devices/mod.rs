@@ -1,21 +1,37 @@
-use std::{collections::HashMap, fmt::Debug, net::IpAddr, sync::Arc, time::Duration};
+use std::{clone, collections::HashMap, fmt::Debug, net::IpAddr, sync::Arc, time::Duration};
 
 use log::{error, info};
 use thiserror::Error;
 use tinkerforge_async::{
-    base58::{Base58, Uid},
-    dmx_bricklet::DmxBricklet,
+    base58::Uid,
+    common::{
+        comcu_bricklet::ComcuBricklet, comcu_bricklet_host::ComcuBrickletHost,
+        comcu_bricklet_host_4_ports::ComcuBrickletHost4Ports,
+        comcu_bricklet_host_4_ports::GetSpitfpErrorCountResponse,
+    },
+    dmx::DmxBricklet,
     error::TinkerforgeError,
-    industrial_quad_relay_v2_bricklet::IndustrialQuadRelayV2Bricklet,
-    io16_bricklet::Io16Bricklet,
-    io16_v2_bricklet::Io16V2Bricklet,
+    industrial_quad_relay_v_2::IndustrialQuadRelayV2Bricklet,
+    io_16::Io16Bricklet,
+    io_16_v_2::Io16V2Bricklet,
     ip_connection::{async_io::AsyncIpConnection, EnumerateResponse, EnumerationType},
-    lcd_128x64_bricklet::Lcd128x64Bricklet,
-    motion_detector_v2_bricklet::MotionDetectorV2Bricklet,
-    temperature_v2_bricklet::TemperatureV2Bricklet,
+    isolator::IsolatorBricklet,
+    lcd_128_x_64::Lcd128X64Bricklet,
+    master::MasterBrick,
+    motion_detector_v_2::MotionDetectorV2Bricklet,
+    temperature_v_2::TemperatureV2Bricklet,
+    DeviceIdentifier,
 };
-use tokio::{pin, sync::mpsc, task, time::interval, time::sleep};
-use tokio_stream::{wrappers::IntervalStream, StreamExt};
+use tokio::{
+    pin,
+    sync::{mpsc, mpsc::Sender},
+    task,
+    time::{interval, sleep},
+};
+use tokio_stream::{
+    wrappers::{IntervalStream, ReceiverStream},
+    StreamExt,
+};
 
 use crate::{
     data::{
@@ -30,7 +46,7 @@ use crate::{
         screen_data_renderer::{show_debug_text, start_screen_thread},
         temperature::handle_temperature,
     },
-    terminator::{TestamentReceiver, TestamentSender},
+    terminator::{LifeLineEnd, TestamentReceiver, TestamentSender},
 };
 
 pub mod display;
@@ -98,6 +114,7 @@ pub fn activate_devices(
 enum EnumerationListenerEvent {
     Packet(EnumerateResponse),
     Terminate,
+    TerminatedClient(Uid),
     Ping,
 }
 
@@ -118,12 +135,16 @@ async fn run_enumeration_listener(
     termination: TestamentReceiver,
     status_updater: mpsc::Sender<StateUpdateMessage>,
 ) -> Result<(), TfBridgeError> {
-    let mut registered_devices: HashMap<Uid, TestamentSender> = HashMap::new();
+    let mut registered_devices: HashMap<Uid, LifeLineEnd> = HashMap::new();
 
     let mut ipcon = AsyncIpConnection::new(addr).await?;
+    let endpoint_addr = addr.0.clone();
     // Enumerate
     let enumeration_stream = ipcon.clone().enumerate().await?;
     pin!(enumeration_stream);
+
+    let (terminated_tx, terminated_rx) = mpsc::channel(10);
+
     let mut stream = enumeration_stream
         .as_mut()
         .map(EnumerationListenerEvent::Packet)
@@ -131,7 +152,8 @@ async fn run_enumeration_listener(
         .merge(
             IntervalStream::new(interval(Duration::from_secs(10)))
                 .map(|_| EnumerationListenerEvent::Ping),
-        );
+        )
+        .merge(ReceiverStream::new(terminated_rx).map(EnumerationListenerEvent::TerminatedClient));
     status_updater
         .send(StateUpdateMessage::EndpointConnected(addr.0))
         .await?;
@@ -139,65 +161,54 @@ async fn run_enumeration_listener(
     while let Some(event) = stream.next().await {
         match event {
             EnumerationListenerEvent::Ping => {
-                info!("Ping: {}", addr.0);
+                //info!("Ping: {}", addr.0);
                 ipcon.disconnect_probe().await?;
             }
             EnumerationListenerEvent::Packet(paket) => {
-                match paket.uid.base58_to_u32().map(Into::<Uid>::into) {
-                    Ok(uid) => match paket.enumeration_type {
-                        EnumerationType::Available | EnumerationType::Connected => {
-                            if let Ok(connected_uid) =
-                                paket.connected_uid.base58_to_u32().map(Into::<Uid>::into)
-                            {
-                                if device_testaments.contains_key(&uid) {
-                                    info!("Repeat: {uid}, {:?}", paket.enumeration_type);
-                                    continue;
-                                }
-                                let (testament, testament_stream) = TestamentSender::create();
-                                testament_stream.update_on_terminate(
-                                    StateUpdateMessage::BrickletDisconnected {
-                                        uid,
-                                        endpoint: addr.0,
-                                    },
-                                    status_updater.clone(),
-                                );
-                                device_testaments.insert(uid, testament);
-                                status_updater
-                                    .send(StateUpdateMessage::BrickletConnected {
-                                        uid,
-                                        endpoint: addr.0,
-                                        metadata: BrickletMetadata {
-                                            connected_uid,
-                                            position: paket.position,
-                                            hardware_version: paket.hardware_version,
-                                            firmware_version: paket.firmware_version,
-                                            device_identifier: paket.device_identifier,
-                                        },
-                                    })
-                                    .await
-                                    .expect("Cannot send connection message");
+                let uid = paket.uid;
+                match paket.enumeration_type {
+                    EnumerationType::Available | EnumerationType::Connected => {
+                        if let Some(live_end) = registered_devices.get(&uid) {
+                            if live_end.is_alive() {
+                                info!("Repeat: {uid}, {:?}", paket.enumeration_type);
+                                continue;
+                            } else {
+                                info!("Refresh dead {uid}");
                             }
+                        }
 
-                            match paket.device_identifier {
-                                Lcd128x64Bricklet::DEVICE_IDENTIFIER => {
+                        info!("Registered: {uid}");
+                        if let Some(device_identifier) = paket.device_identifier.parsed() {
+                            status_updater
+                                .send(StateUpdateMessage::BrickletConnected {
+                                    uid,
+                                    endpoint: addr.0,
+                                    metadata: BrickletMetadata {
+                                        connected_uid: paket.connected_uid,
+                                        position: paket.position,
+                                        hardware_version: paket.hardware_version,
+                                        firmware_version: paket.firmware_version,
+                                        device_identifier,
+                                    },
+                                })
+                                .await
+                                .expect("Cannot send connection message");
+                            match device_identifier {
+                                DeviceIdentifier::Lcd128X64Bricklet => {
                                     if let Some(screen_settings) =
                                         tinkerforge_devices.lcd_screens.get(&uid)
                                     {
-                                        register_handle(
-                                            &mut registered_devices,
-                                            uid,
-                                            start_screen_thread(
-                                                Lcd128x64Bricklet::new(uid, ipcon.clone()),
-                                                event_registry.clone(),
-                                                *screen_settings,
-                                            )
-                                            .await,
+                                        let sender = start_screen_thread(
+                                            Lcd128X64Bricklet::new(uid, ipcon.clone()),
+                                            event_registry.clone(),
+                                            *screen_settings,
                                         )
                                         .await;
+                                        register_handle(&mut registered_devices, uid, sender).await;
                                     } else {
                                         info!("Found unused LCD Device {} on {addr:?}", uid);
                                         if let Err(error) = show_debug_text(
-                                            Lcd128x64Bricklet::new(uid, ipcon.clone()),
+                                            Lcd128X64Bricklet::new(uid, ipcon.clone()),
                                             &format!("UID: {uid}"),
                                         )
                                         .await
@@ -206,7 +217,7 @@ async fn run_enumeration_listener(
                                         }
                                     }
                                 }
-                                DmxBricklet::DEVICE_IDENTIFIER => {
+                                DeviceIdentifier::DmxBricklet => {
                                     if let Some(settings) =
                                         tinkerforge_devices.dmx_bricklets.get(&uid)
                                     {
@@ -225,7 +236,7 @@ async fn run_enumeration_listener(
                                         info!("Found unused DMX Bricklet {uid} on {addr:?}");
                                     }
                                 }
-                                Io16Bricklet::DEVICE_IDENTIFIER => {
+                                DeviceIdentifier::Io16Bricklet => {
                                     if let Some(settings) =
                                         tinkerforge_devices.io_bricklets.get(&uid)
                                     {
@@ -244,7 +255,7 @@ async fn run_enumeration_listener(
                                         info!("Found unused IO16 Device {uid} on {addr:?}");
                                     }
                                 }
-                                Io16V2Bricklet::DEVICE_IDENTIFIER => {
+                                DeviceIdentifier::Io16V2Bricklet => {
                                     if let Some(settings) =
                                         tinkerforge_devices.io_bricklets.get(&uid)
                                     {
@@ -263,7 +274,7 @@ async fn run_enumeration_listener(
                                         info!("Found unused IO16 v2 Device {uid} on {addr:?}");
                                     }
                                 }
-                                MotionDetectorV2Bricklet::DEVICE_IDENTIFIER => {
+                                DeviceIdentifier::MotionDetectorV2Bricklet => {
                                     if let Some(settings) =
                                         tinkerforge_devices.motion_detectors.get(&uid)
                                     {
@@ -281,7 +292,7 @@ async fn run_enumeration_listener(
                                         info!("Found unused Motion detector {uid} on {addr:?}");
                                     }
                                 }
-                                TemperatureV2Bricklet::DEVICE_IDENTIFIER => {
+                                DeviceIdentifier::TemperatureV2Bricklet => {
                                     if let Some(settings) =
                                         tinkerforge_devices.temperature_sensors.get(&uid)
                                     {
@@ -299,7 +310,7 @@ async fn run_enumeration_listener(
                                         info!("Found unused Temperature Sensor {uid} on {addr:?}");
                                     }
                                 }
-                                IndustrialQuadRelayV2Bricklet::DEVICE_IDENTIFIER => {
+                                DeviceIdentifier::IndustrialQuadRelayV2Bricklet => {
                                     if let Some(settings) = tinkerforge_devices.relays.get(&uid) {
                                         register_handle(
                                             &mut registered_devices,
@@ -322,24 +333,54 @@ async fn run_enumeration_listener(
 
                                 _ => {}
                             }
+                            if let Some(running_registration) = registered_devices.get(&uid) {
+                                running_registration.update_on_terminate(
+                                    StateUpdateMessage::BrickletDisconnected {
+                                        uid,
+                                        endpoint: addr.0,
+                                    },
+                                    status_updater.clone(),
+                                );
+                            } else {
+                                let (testament, testament_stream) = TestamentSender::create();
+                                testament_stream.update_on_terminate(
+                                    StateUpdateMessage::BrickletDisconnected {
+                                        uid,
+                                        endpoint: addr.0,
+                                    },
+                                    status_updater.clone(),
+                                );
+                                device_testaments.insert(uid, testament);
+                            }
                         }
-                        EnumerationType::Disconnected => {
-                            info!("Disconnected device: {}", uid);
-                            device_testaments.remove(&uid);
-                        }
-                        EnumerationType::Unknown => {
-                            info!("Unknown Event: {:?}", paket);
-                        }
-                    },
-                    Err(error) => {
-                        error!("Cannot parse UID {}: {error}", paket.uid)
+                    }
+                    EnumerationType::Disconnected => {
+                        info!("Disconnected device: {}", uid);
+                        device_testaments.remove(&uid);
+                        registered_devices.remove(&uid);
+                    }
+                    EnumerationType::Unknown => {
+                        info!("Unknown Event: {:?}", paket);
                     }
                 }
             }
             EnumerationListenerEvent::Terminate => return Ok(()),
+            EnumerationListenerEvent::TerminatedClient(uid) => {
+                info!("Terminated {uid} on {}", addr.0);
+                device_testaments.remove(&uid);
+            }
         };
     }
     Err(TfBridgeError::ConnectionLost)
+}
+
+async fn register_callbacks(
+    callbacks: LifeLineEnd,
+    uid: Uid,
+    registered_devices: &mut HashMap<Uid, LifeLineEnd>,
+    terminated_tx: Sender<Uid>,
+) {
+    register_handle(registered_devices, uid, callbacks).await;
 }
 
 fn start_enumeration_listener(
@@ -390,9 +431,9 @@ fn start_enumeration_listener(
 }
 
 async fn register_handle(
-    running_threads: &mut HashMap<Uid, TestamentSender>,
+    running_threads: &mut HashMap<Uid, LifeLineEnd>,
     uid: Uid,
-    abort_handle: TestamentSender,
+    abort_handle: LifeLineEnd,
 ) {
     running_threads.insert(uid, abort_handle);
 }

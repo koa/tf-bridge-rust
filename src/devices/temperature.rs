@@ -3,14 +3,14 @@ use thiserror::Error;
 use tinkerforge_async::{
     base58::Base58Error,
     error::TinkerforgeError,
-    temperature_v2_bricklet::{
-        TemperatureV2Bricklet, TEMPERATURE_V2_BRICKLET_STATUS_LED_CONFIG_OFF,
-        TEMPERATURE_V2_BRICKLET_THRESHOLD_OPTION_OFF,
+    temperature_v_2::{
+        SetTemperatureCallbackConfigurationRequest, TemperatureV2Bricklet, ThresholdOption,
     },
 };
 use tokio::sync::mpsc;
 use tokio_stream::StreamExt;
 
+use crate::terminator::LifeLineEnd;
 use crate::{
     data::{
         registry::{EventRegistry, TemperatureKey},
@@ -23,8 +23,8 @@ pub fn handle_temperature(
     bricklet: TemperatureV2Bricklet,
     event_registry: EventRegistry,
     temperature_key: TemperatureKey,
-) -> TestamentSender {
-    let (tx, rx) = TestamentSender::create();
+) -> LifeLineEnd {
+    let (tx, rx) = LifeLineEnd::create();
     tokio::spawn(async move {
         if let Err(error) = temperature_task(bricklet, event_registry, temperature_key, rx).await {
             error!("Error processing temperature: {error}");
@@ -32,6 +32,7 @@ pub fn handle_temperature(
     });
     tx
 }
+
 #[derive(Error, Debug)]
 enum TemperatureError {
     #[error("Tinkerforge error: {0}")]
@@ -43,6 +44,7 @@ enum TemperatureError {
     #[error("Cannot parse UID {0}")]
     Uid(#[from] Base58Error),
 }
+
 enum TemperatureEvent {
     Temperature(f32),
     Closed,
@@ -52,23 +54,20 @@ async fn temperature_task(
     mut bricklet: TemperatureV2Bricklet,
     event_registry: EventRegistry,
     temperature_key: TemperatureKey,
-    termination_receiver: TestamentReceiver,
+    termination_receiver: LifeLineEnd,
 ) -> Result<(), TemperatureError> {
     bricklet
-        .set_status_led_config(TEMPERATURE_V2_BRICKLET_STATUS_LED_CONFIG_OFF)
-        .await?;
-    bricklet
-        .set_temperature_callback_configuration(
-            10000,
-            true,
-            TEMPERATURE_V2_BRICKLET_THRESHOLD_OPTION_OFF,
-            20,
-            20,
-        )
+        .set_temperature_callback_configuration(SetTemperatureCallbackConfigurationRequest {
+            period: 10000,
+            value_has_to_change: true,
+            option: ThresholdOption::Off,
+            min: 20,
+            max: 20,
+        })
         .await?;
 
     let mut stream = bricklet
-        .get_temperature_callback_receiver()
+        .temperature_stream()
         .await
         .map(|t| TemperatureEvent::Temperature(t as f32 / 100.0))
         .merge(termination_receiver.send_on_terminate(TemperatureEvent::Closed));
@@ -84,5 +83,6 @@ async fn temperature_task(
             TemperatureEvent::Closed => break,
         }
     }
+    drop(termination_receiver);
     Ok(())
 }
