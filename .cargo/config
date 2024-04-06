@@ -4,3 +4,5 @@ linker = "arm-linux-musleabihf-gcc"
 linker = "arm-linux-gnueabihf-gcc"
 [target.arm-unknown-linux-musleabihf]
 linker = "arm-linux-musleabihf-gcc"
+[registries]
+kellnr-berg-turbenthal = { index = "sparse+https://kellnr.berg-turbenthal.ch/api/v1/crates/" }
