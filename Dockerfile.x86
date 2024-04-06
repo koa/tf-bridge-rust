@@ -1,6 +1,7 @@
 FROM ghcr.io/koa/rust-cross-compile:0.0.1 as rust
 ADD . /build/
 WORKDIR /build
+RUN mkdir -p $HOME/.cargo && echo '[registries]' >> $HOME/.cargo/config.toml && echo 'kellnr-berg-turbenthal = { index = "sparse+https://kellnr.berg-turbenthal.ch/api/v1/crates/"}' >> $HOME/.cargo/config.toml
 RUN cargo build --release --target x86_64-unknown-linux-musl
 FROM scratch as target
 COPY --from=rust /etc/ssl /etc/ssl
