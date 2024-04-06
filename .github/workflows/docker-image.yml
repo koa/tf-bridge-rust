@@ -42,7 +42,7 @@ jobs:
             type=semver,pattern={{version}},suffix=-arm
             type=semver,pattern={{major}}.{{minor}},suffix=-arm
             type=semver,pattern={{major}},suffix=-arm
-            type=sha,suffix=-x86
+            type=sha,suffix=-arm
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
       - name: Login to GitHub Container Registry
