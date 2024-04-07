@@ -1,6 +1,6 @@
 use std::{error::Error, fmt::Debug, fs::File, future::Future, time::Duration};
 
-use actix_web::{get, App, HttpServer};
+use actix_web::{App, get, HttpServer};
 use actix_web_prometheus::PrometheusMetricsBuilder;
 use env_logger::{Env, TimestampPrecision};
 use log::{error, info};
@@ -10,7 +10,7 @@ use tokio::{
     sync::mpsc::{self, Sender},
     time::sleep,
 };
-use tokio_stream::{once, wrappers::ReceiverStream, StreamExt};
+use tokio_stream::{once, StreamExt, wrappers::ReceiverStream};
 
 use crate::{
     controller::{
@@ -21,7 +21,7 @@ use crate::{
     data::{
         google_data::read_sheet_data,
         registry::EventRegistry,
-        settings::{Tinkerforge, CONFIG},
+        settings::{CONFIG, Tinkerforge},
         state::{State, StateUpdateMessage},
         wiring::{Controllers, MotionDetector, Wiring},
     },
@@ -37,6 +37,7 @@ mod icons;
 mod snapshot;
 mod terminator;
 mod util;
+mod metrics;
 
 #[get("/health")]
 async fn health() -> &'static str {
@@ -156,7 +157,7 @@ async fn config_update_loop(
                         None
                     },
                 )
-                .await?;
+                    .await?;
                 if wiring == current_wiring {
                     info!("Configuration unchanged");
                     fech_next_in(
@@ -172,7 +173,7 @@ async fn config_update_loop(
                         &mut running_controllers,
                         wiring.controllers.clone(),
                     )
-                    .await;
+                        .await;
                 }
                 if wiring.tinkerforge_devices != current_wiring.tinkerforge_devices {
                     activate_devices(
@@ -229,7 +230,7 @@ async fn activate_controllers(
                 dimmer_cfg.auto_switch_off_time,
                 dimmer_cfg.presence.as_ref(),
             )
-            .await,
+                .await,
         ));
     }
     for switch_cfg in dual_input_switches.iter() {
@@ -241,7 +242,7 @@ async fn activate_controllers(
                 switch_cfg.auto_switch_off_time,
                 switch_cfg.presence.as_ref(),
             )
-            .await,
+                .await,
         ));
     }
     for motion_detector_cfg in motion_detectors.iter() {
@@ -264,7 +265,7 @@ async fn activate_controllers(
                     *output,
                     *switch_off_time,
                 )
-                .await
+                    .await
             }
         }));
     }
@@ -276,7 +277,7 @@ async fn activate_controllers(
                 cfg.target_value_input,
                 cfg.output,
             )
-            .await,
+                .await,
         ));
     }
     for cfg in ring_controllers.iter() {
@@ -312,7 +313,7 @@ async fn fetch_config(
 fn start_snapshot_thread(
     event_registry: &EventRegistry,
     state_file: &'static str,
-) -> impl Future<Output = ()> {
+) -> impl Future<Output=()> {
     let event_registry = event_registry.clone();
     async move {
         let mut last_snapshot = Default::default();

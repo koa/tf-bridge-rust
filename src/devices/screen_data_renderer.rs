@@ -60,6 +60,7 @@ use crate::{
     icons,
     util,
 };
+use crate::metrics::report_spitf_error_counters;
 use crate::terminator::LifeLineEnd;
 
 const TEXT_STYLE: MonoTextStyle<BinaryColor> = MonoTextStyle::new(&FONT_6X12, BinaryColor::On);
@@ -613,7 +614,7 @@ async fn screen_thread_loop(
             ScreenMessage::UpdateBrightness(brightness) => screen.set_brightness(brightness.0),
             ScreenMessage::PollCounters => {
                 let counter = display.bricklet_mut().get_spitfp_error_count().await?;
-                info!("Counters {uid}: {counter:?}");
+                report_spitf_error_counters(uid, None, counter.error_count_ack_checksum, counter.error_count_message_checksum, counter.error_count_frame, counter.error_count_overflow);
             }
         };
         display.clear();

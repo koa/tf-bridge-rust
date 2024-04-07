@@ -15,16 +15,15 @@ use tinkerforge_async::{
     motion_detector_v_2::MotionDetectorV2Bricklet,
     temperature_v_2::TemperatureV2Bricklet,
 };
+use tinkerforge_async::isolator::IsolatorBricklet;
+use tinkerforge_async::master::MasterBrick;
 use tokio::{
     pin,
     sync::mpsc,
     task,
     time::{interval, sleep},
 };
-use tokio_stream::{
-    StreamExt,
-    wrappers::IntervalStream,
-};
+use tokio_stream::{StreamExt, wrappers::IntervalStream};
 
 use crate::{
     data::{
@@ -41,10 +40,14 @@ use crate::{
     },
     terminator::{LifeLineEnd, TestamentReceiver, TestamentSender},
 };
+use crate::devices::isolator::handle_isolator;
+use crate::devices::master::handle_master;
 
 pub mod display;
 pub mod dmx_handler;
 pub mod io_handler;
+pub mod isolator;
+pub mod master;
 pub mod motion_detector;
 pub mod relay;
 pub mod screen_data_renderer;
@@ -323,6 +326,22 @@ async fn run_enumeration_listener(
                                     } else {
                                         info!("Found unused Relay Bricklet {uid} on {addr:?}");
                                     }
+                                }
+                                DeviceIdentifier::MasterBrick => {
+                                    register_handle(
+                                        &mut registered_devices,
+                                        uid,
+                                        handle_master(MasterBrick::new(uid, ipcon.clone())),
+                                    )
+                                        .await;
+                                }
+                                DeviceIdentifier::IsolatorBricklet => {
+                                    register_handle(
+                                        &mut registered_devices,
+                                        uid,
+                                        handle_isolator(IsolatorBricklet::new(uid, ipcon.clone())),
+                                    )
+                                        .await;
                                 }
 
                                 _ => {}
