@@ -34,10 +34,10 @@ mod controller;
 mod data;
 mod devices;
 mod icons;
+mod metrics;
 mod snapshot;
 mod terminator;
 mod util;
-mod metrics;
 
 #[get("/health")]
 async fn health() -> &'static str {
@@ -130,7 +130,7 @@ async fn config_update_loop(
         match message {
             MainLoopEvent::StatusUpdateMessage(update) => {
                 state_received = true;
-                if known_state.process_msg(update.clone()) {
+                if known_state.process_msg(update) {
                     match update {
                         StateUpdateMessage::EndpointConnected(ip) => {
                             info!("Endpoint {ip} connected");
@@ -143,6 +143,12 @@ async fn config_update_loop(
                         }
                         StateUpdateMessage::BrickletDisconnected { uid, .. } => {
                             info!("Bricklet {uid} disconnected");
+                        }
+                        StateUpdateMessage::SpitfpMetrics { uid, .. } => {
+                            info!("Bricklet {uid} updated metrics");
+                        }
+                        StateUpdateMessage::CommunicationFailed { uid, .. } => {
+                            info!("Bricklet {uid} failed communication");
                         }
                     }
                     fech_next_in(main_tx.clone(), &mut config_timer, Duration::from_secs(2));
@@ -157,7 +163,7 @@ async fn config_update_loop(
                         None
                     },
                 )
-                    .await?;
+                .await?;
                 if wiring == current_wiring {
                     info!("Configuration unchanged");
                     fech_next_in(
@@ -173,7 +179,7 @@ async fn config_update_loop(
                         &mut running_controllers,
                         wiring.controllers.clone(),
                     )
-                        .await;
+                    .await;
                 }
                 if wiring.tinkerforge_devices != current_wiring.tinkerforge_devices {
                     activate_devices(
@@ -230,7 +236,7 @@ async fn activate_controllers(
                 dimmer_cfg.auto_switch_off_time,
                 dimmer_cfg.presence.as_ref(),
             )
-                .await,
+            .await,
         ));
     }
     for switch_cfg in dual_input_switches.iter() {
@@ -242,7 +248,7 @@ async fn activate_controllers(
                 switch_cfg.auto_switch_off_time,
                 switch_cfg.presence.as_ref(),
             )
-                .await,
+            .await,
         ));
     }
     for motion_detector_cfg in motion_detectors.iter() {
@@ -265,7 +271,7 @@ async fn activate_controllers(
                     *output,
                     *switch_off_time,
                 )
-                    .await
+                .await
             }
         }));
     }
@@ -277,7 +283,7 @@ async fn activate_controllers(
                 cfg.target_value_input,
                 cfg.output,
             )
-                .await,
+            .await,
         ));
     }
     for cfg in ring_controllers.iter() {
@@ -313,7 +319,7 @@ async fn fetch_config(
 fn start_snapshot_thread(
     event_registry: &EventRegistry,
     state_file: &'static str,
-) -> impl Future<Output=()> {
+) -> impl Future<Output = ()> {
     let event_registry = event_registry.clone();
     async move {
         let mut last_snapshot = Default::default();

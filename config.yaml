@@ -7,6 +7,7 @@ tinkerforge:
 google-sheet:
   key_file: sa-development.json
   spreadsheet_id: 1a2OKCYMOUxE7PfjLjPgvIAf7WY9Y6uTMiXkEKHLlDoo
+  timestamp_format: '%d.%b %H:%M'
   endpoints:
     sheet: Tinkerforge Endpoints
     range: A:F
@@ -91,7 +92,7 @@ google-sheet:
     state: Status Dev
   available_bricklets:
     sheet: Verfügbare Geräte Dev
-    range: A:M
+    range: A:O
     endpoint: Endpoint
     master_id: Master Brick
     uid: Adresse
@@ -105,3 +106,5 @@ google-sheet:
     display: Display
     dmx_channels: DMX Kanäle
     relays: Relays
+    connection_failed_counters: Unterbrüche
+    errors: Fehler

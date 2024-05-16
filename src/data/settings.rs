@@ -50,6 +50,7 @@ pub struct GoogleSheet {
     key_file: Option<Box<str>>,
     key_data: Option<Box<str>>,
     spreadsheet_id: Box<str>,
+    timestamp_format: Box<str>,
     endpoints: GoogleEndpointData,
     light: GoogleLightData,
     light_templates: GoogleLightTemplateData,
@@ -178,6 +179,8 @@ pub struct GoogleAvailableBricklets {
     display: Box<str>,
     dmx_channels: Box<str>,
     relays: Box<str>,
+    connection_failed_counters: Box<str>,
+    errors: Box<str>,
 }
 
 #[derive(Error, Debug)]
@@ -244,6 +247,10 @@ impl GoogleSheet {
 
     pub fn available_bricklets(&self) -> &GoogleAvailableBricklets {
         &self.available_bricklets
+    }
+
+    pub fn timestamp_format(&self) -> &Box<str> {
+        &self.timestamp_format
     }
 }
 
@@ -530,6 +537,13 @@ impl GoogleAvailableBricklets {
     }
     pub fn relays(&self) -> &str {
         &self.relays
+    }
+    pub fn connection_failed_counters(&self) -> &Box<str> {
+        &self.connection_failed_counters
+    }
+
+    pub fn errors(&self) -> &Box<str> {
+        &self.errors
     }
 }
 

@@ -1,12 +1,12 @@
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use log::info;
 use tokio::{
     sync::{mpsc, watch},
     task::{AbortHandle, JoinHandle},
 };
-use tokio_stream::{wrappers::WatchStream, Stream, StreamExt};
+use tokio_stream::{Stream, StreamExt, wrappers::WatchStream};
 
 pub struct TestamentSender(Option<watch::Sender<Option<()>>>);
 
@@ -14,6 +14,7 @@ pub struct TestamentSender(Option<watch::Sender<Option<()>>>);
 pub struct TestamentReceiver(watch::Receiver<Option<()>>);
 
 pub struct LifeLineEnd {
+    #[allow(unused)]
     sender: TestamentSender,
     receiver: TestamentReceiver,
     is_alive: Arc<AtomicBool>,
@@ -100,9 +101,6 @@ impl<T> From<JoinHandle<T>> for JoinHandleTerminator<T> {
 impl<T> JoinHandleTerminator<T> {
     pub fn new(handle: JoinHandle<T>) -> Self {
         Self(handle)
-    }
-    pub(crate) fn is_finished(&self) -> bool {
-        self.0.is_finished()
     }
 }
 

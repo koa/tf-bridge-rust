@@ -1,22 +1,16 @@
 use embedded_graphics::{
+    Pixel,
     pixelcolor::BinaryColor,
     prelude::{Dimensions, DrawTarget, Point, Size},
     primitives::Rectangle,
-    Pixel,
 };
 use strum_macros::EnumIter;
-use sub_array::SubArray;
 use tinkerforge_async::error::TinkerforgeError;
-use tinkerforge_async::lcd_128_x_64::{
-    Lcd128X64Bricklet, SetDisplayConfigurationRequest,
-    SetTouchPositionCallbackConfigurationRequest, TouchLedConfig, TouchPositionCallback,
-    WritePixelsLowLevelRequest,
-};
+use tinkerforge_async::lcd_128_x_64::{Lcd128X64Bricklet, SetDisplayConfigurationRequest, SetTouchPositionCallbackConfigurationRequest, TouchLedConfig, TouchPositionCallback, WritePixelsRequest};
 use tokio_stream::{Stream, StreamExt};
 
 use crate::data::wiring::Orientation;
 
-const PIXEL_PER_PAKET: u16 = 448;
 const DISPLAY_WIDTH: usize = 128;
 const DISPLAY_HEIGHT: usize = 64;
 const TOTAL_PIXEL_COUNT: usize = DISPLAY_WIDTH * DISPLAY_HEIGHT;
@@ -41,8 +35,8 @@ impl DrawTarget for Lcd128x64BrickletDisplay {
     type Error = ();
 
     fn draw_iter<I>(&mut self, pixels: I) -> Result<(), Self::Error>
-    where
-        I: IntoIterator<Item = Pixel<Self::Color>>,
+        where
+            I: IntoIterator<Item=Pixel<Self::Color>>,
     {
         self.pending_image.draw_iter(
             pixels
@@ -82,55 +76,15 @@ impl Lcd128x64BrickletDisplay {
         self.bricklet
             .set_touch_led_config(TouchLedConfig::Off)
             .await?;
-        let mut current_pos = 0;
-        let pixel_count = self.current_image.len();
-        while current_pos < pixel_count {
-            //println!("Scan from {current_pos}");
-            while current_pos < pixel_count
-                && self.current_image[current_pos..current_pos + 64]
-                    == self.pending_image.data[current_pos..current_pos + 64]
-            {
-                current_pos += 64;
-            }
-            if current_pos >= TOTAL_PIXEL_COUNT {
-                break;
-            }
-            //println!("Paint from {current_pos}");
-            let remaining_pixels = TOTAL_PIXEL_COUNT - current_pos;
-            if remaining_pixels > PIXEL_PER_PAKET as usize {
-                let until_offset = current_pos as u16 + PIXEL_PER_PAKET;
-                let data_chunk = self.pending_image.data.sub_array_ref(current_pos);
-                self.bricklet
-                    .write_pixels_low_level(WritePixelsLowLevelRequest {
-                        x_start: 0,
-                        y_start: 0,
-                        x_end: 127,
-                        y_end: 63,
-                        pixels_length: until_offset,
-                        pixels_chunk_offset: current_pos as u16,
-                        pixels_chunk_data: *data_chunk,
-                    })
-                    .await?;
-                self.current_image[current_pos..current_pos + PIXEL_PER_PAKET as usize]
-                    .copy_from_slice(data_chunk);
-            } else {
-                let mut temp_array = [false; PIXEL_PER_PAKET as usize];
-                let data_chunk = &self.pending_image.data[current_pos..TOTAL_PIXEL_COUNT];
-                temp_array[0..remaining_pixels].copy_from_slice(data_chunk);
-                self.bricklet
-                    .write_pixels_low_level(WritePixelsLowLevelRequest {
-                        x_start: 0,
-                        y_start: 0,
-                        x_end: 127,
-                        y_end: 63,
-                        pixels_length: TOTAL_PIXEL_COUNT as u16,
-                        pixels_chunk_offset: current_pos as u16,
-                        pixels_chunk_data: temp_array,
-                    })
-                    .await?;
-                self.current_image[current_pos..TOTAL_PIXEL_COUNT].copy_from_slice(data_chunk);
-            }
-            current_pos += PIXEL_PER_PAKET as usize;
+        if self.current_image != self.pending_image.data {
+            self.bricklet.write_pixels(WritePixelsRequest {
+                x_start: 0,
+                y_start: 0,
+                x_end: DISPLAY_WIDTH as u8 - 1,
+                y_end: DISPLAY_HEIGHT as u8 - 1,
+                data: &self.pending_image.data,
+            }).await?;
+            self.current_image.copy_from_slice(&self.pending_image.data);
         }
         self.bricklet.draw_buffered_frame(false).await?;
         self.bricklet
@@ -144,7 +98,7 @@ impl Lcd128x64BrickletDisplay {
     }
     pub async fn input_stream(
         &mut self,
-    ) -> Result<impl Stream<Item = TouchPositionCallback>, TinkerforgeError> {
+    ) -> Result<impl Stream<Item=TouchPositionCallback>, TinkerforgeError> {
         self.bricklet
             .set_touch_position_callback_configuration(
                 SetTouchPositionCallbackConfigurationRequest {
@@ -236,8 +190,8 @@ impl<const W: usize, const L: usize> DrawTarget for BooleanImage<W, L> {
     type Error = ();
 
     fn draw_iter<I>(&mut self, pixels: I) -> Result<(), Self::Error>
-    where
-        I: IntoIterator<Item = Pixel<Self::Color>>,
+        where
+            I: IntoIterator<Item=Pixel<Self::Color>>,
     {
         for Pixel(Point { x, y }, color) in pixels {
             if x >= 0 && x < W as i32 {
@@ -322,7 +276,7 @@ mod test {
     use embedded_graphics::prelude::Point;
     use strum::IntoEnumIterator;
 
-    use crate::devices::display::{translate_point, translate_reverse, Orientation};
+    use crate::devices::display::{Orientation, translate_point, translate_reverse};
 
     #[test]
     fn test_translate_and_reverse() {

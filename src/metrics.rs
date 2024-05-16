@@ -1,9 +1,10 @@
 use lazy_static::lazy_static;
-use prometheus::{
-    GaugeVec, IntGaugeVec, register_gauge_vec,
-    register_int_gauge_vec,
-};
+use log::error;
+use prometheus::{GaugeVec, IntGaugeVec, register_gauge_vec, register_int_gauge_vec};
 use tinkerforge_async::base58::Uid;
+use tokio::sync::mpsc::Sender;
+
+use crate::data::state::{SpitfpErrorCounters, StateUpdateMessage};
 
 lazy_static! {
     static ref ACK_CHECKSUM_ERROR_COUNTER: IntGaugeVec = register_int_gauge_vec!(
@@ -62,7 +63,8 @@ lazy_static! {
     .expect("Cannot initialize prometheus metric");
 }
 
-pub fn report_spitf_error_counters(
+pub async fn report_spitf_error_counters(
+    status_updater: &Sender<StateUpdateMessage>,
     device: Uid,
     port: Option<char>,
     error_count_ack_checksum: u32,
@@ -86,7 +88,22 @@ pub fn report_spitf_error_counters(
         .set(error_count_frame.into());
     OVERFLOW_ERROR_COUNTER
         .with_label_values(labels)
-        .set(error_count_overflow.into())
+        .set(error_count_overflow.into());
+    if let Err(e) = status_updater
+        .send(StateUpdateMessage::SpitfpMetrics {
+            uid: device,
+            port,
+            counters: SpitfpErrorCounters {
+                error_count_ack_checksum,
+                error_count_message_checksum,
+                error_count_frame,
+                error_count_overflow,
+            },
+        })
+        .await
+    {
+        error!("Cannot update statistics for {device}: {e}");
+    }
 }
 
 pub fn report_current(device: Uid, current: f64) {

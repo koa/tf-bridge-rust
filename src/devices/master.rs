@@ -3,34 +3,31 @@ use std::time::Duration;
 use log::{error, info};
 use tinkerforge_async::{error::TinkerforgeError, master::MasterBrick};
 use tokio::{
-    sync::mpsc::{
-        self,
-        Receiver,
-    },
+    sync::mpsc::{self, Receiver},
     time::sleep,
 };
+use tokio::sync::mpsc::Sender;
 use tokio_stream::StreamExt;
 
 use crate::{
     metrics::{
-        report_current,
-        report_device_temperature,
-        report_ethernet_traffic,
-        report_spitf_error_counters,
-        report_voltage,
+        report_current, report_device_temperature, report_ethernet_traffic,
+        report_spitf_error_counters, report_voltage,
     },
     terminator::LifeLineEnd,
 };
+use crate::data::state::StateUpdateMessage;
 
 pub fn handle_master(
     bricklet: MasterBrick,
+    status_updater: Sender<StateUpdateMessage>,
 ) -> LifeLineEnd {
     let (end1, end2) = LifeLineEnd::create();
     let poll_master = bricklet.clone();
     let (termination_tx, termination_rx) = mpsc::channel(1);
     end2.update_on_terminate((), termination_tx);
     tokio::spawn(async move {
-        match master_poll(poll_master, termination_rx).await {
+        match master_poll(poll_master, termination_rx, status_updater).await {
             Ok(_) => {}
             Err(error) => {
                 error!("Cannot poll MasterBrick: {error}");
@@ -101,6 +98,7 @@ async fn master_loop(
 async fn master_poll(
     mut poll_master: MasterBrick,
     termination_rx: Receiver<()>,
+    status_updater: Sender<StateUpdateMessage>,
 ) -> Result<(), TinkerforgeError> {
     let uid = poll_master.uid();
     while termination_rx.is_empty() && !termination_rx.is_closed() {
@@ -109,13 +107,15 @@ async fn master_poll(
         for port in ['a', 'b', 'c', 'd'] {
             let counters = poll_master.get_spitfp_error_count(port).await?;
             report_spitf_error_counters(
+                &status_updater,
                 uid,
                 Some(port),
                 counters.error_count_ack_checksum,
                 counters.error_count_message_checksum,
                 counters.error_count_frame,
                 counters.error_count_overflow,
-            );
+            )
+            .await;
         }
         let temperature = poll_master.get_chip_temperature().await?;
         report_device_temperature(uid, temperature as f64 / 10.0);

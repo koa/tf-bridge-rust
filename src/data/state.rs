@@ -5,9 +5,8 @@ use std::{
     time::SystemTime,
 };
 
-use tinkerforge_async::base58::Uid;
+use tinkerforge_async::{base58::Uid, ip_connection::Version};
 use tinkerforge_async::DeviceIdentifier;
-use tinkerforge_async::ip_connection::Version;
 
 #[derive(Default, Debug)]
 pub struct State {
@@ -15,7 +14,7 @@ pub struct State {
     bricklets: HashMap<Uid, BrickletConnectionData>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub enum StateUpdateMessage {
     EndpointConnected(IpAddr),
     EndpointDisconnected(IpAddr),
@@ -23,11 +22,29 @@ pub enum StateUpdateMessage {
         uid: Uid,
         endpoint: IpAddr,
         metadata: BrickletMetadata,
+        session: u32,
     },
     BrickletDisconnected {
         uid: Uid,
         endpoint: IpAddr,
+        session: u32,
     },
+    SpitfpMetrics {
+        uid: Uid,
+        port: Option<char>,
+        counters: SpitfpErrorCounters,
+    },
+    CommunicationFailed {
+        uid: Uid,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SpitfpErrorCounters {
+    pub error_count_ack_checksum: u32,
+    pub error_count_message_checksum: u32,
+    pub error_count_frame: u32,
+    pub error_count_overflow: u32,
 }
 
 #[derive(Debug)]
@@ -48,6 +65,9 @@ pub struct BrickletConnectionData {
     pub last_change: SystemTime,
     pub endpoint: IpAddr,
     pub metadata: Option<BrickletMetadata>,
+    pub connection_failed_counter: u32,
+    pub error_counters: HashMap<Option<char>, SpitfpErrorCounters>,
+    pub session: u32,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq)]
@@ -105,18 +125,23 @@ impl State {
                 uid,
                 endpoint,
                 metadata,
+                session,
             } => match self.bricklets.entry(uid) {
                 Entry::Occupied(mut existing_entry) => {
                     let entry_ref = existing_entry.get();
                     if entry_ref.state != ConnectionState::Connected
                         || entry_ref.metadata.as_ref() != Some(&metadata)
                         || entry_ref.endpoint != endpoint
+                        || entry_ref.session != session
                     {
                         existing_entry.insert(BrickletConnectionData {
                             state: ConnectionState::Connected,
                             last_change: SystemTime::now(),
                             endpoint,
                             metadata: Some(metadata),
+                            connection_failed_counter: entry_ref.connection_failed_counter + 1,
+                            error_counters: Default::default(),
+                            session,
                         });
                         true
                     } else {
@@ -129,14 +154,22 @@ impl State {
                         last_change: SystemTime::now(),
                         endpoint,
                         metadata: Some(metadata),
+                        connection_failed_counter: 0,
+                        error_counters: Default::default(),
+                        session,
                     });
                     true
                 }
             },
-            StateUpdateMessage::BrickletDisconnected { uid, endpoint } => {
+            StateUpdateMessage::BrickletDisconnected {
+                uid,
+                endpoint,
+                session,
+            } => {
                 if let Some(entry_data) = self.bricklets.get_mut(&uid) {
                     if entry_data.state != ConnectionState::Disconnected
                         && entry_data.endpoint == endpoint
+                        && entry_data.session == session
                     {
                         entry_data.last_change = SystemTime::now();
                         entry_data.state = ConnectionState::Disconnected;
@@ -144,6 +177,30 @@ impl State {
                     } else {
                         false
                     }
+                } else {
+                    false
+                }
+            }
+            StateUpdateMessage::SpitfpMetrics {
+                uid,
+                port,
+                counters,
+            } => {
+                if let Some(entry_data) = self.bricklets.get_mut(&uid) {
+                    if entry_data.error_counters.get(&port) == Some(&counters) {
+                        false
+                    } else {
+                        entry_data.error_counters.insert(port, counters);
+                        true
+                    }
+                } else {
+                    false
+                }
+            }
+            StateUpdateMessage::CommunicationFailed { uid } => {
+                if let Some(entry_data) = self.bricklets.get_mut(&uid) {
+                    entry_data.connection_failed_counter += 1;
+                    true
                 } else {
                     false
                 }

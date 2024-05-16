@@ -10,8 +10,10 @@ use std::{
     time::SystemTime,
     vec::IntoIter,
 };
+use std::cmp::Ordering;
 
 use chrono::{DateTime, Local};
+use chrono::format::StrftimeItems;
 use google_sheets4::{
     api::{BatchUpdateValuesRequest, CellData, SpreadsheetMethods, ValueRange},
     hyper::{Client, client::HttpConnector},
@@ -42,6 +44,7 @@ use crate::{
     },
     util::kelvin_2_mireds,
 };
+use crate::data::state::SpitfpErrorCounters;
 
 #[derive(Error, Debug)]
 pub enum GoogleDataError {
@@ -82,6 +85,7 @@ struct ParserContext<'a> {
     config: &'a GoogleSheet,
     spreadsheet_methods: SpreadsheetMethods<'a, HttpsConnector<HttpConnector>>,
     state: Option<&'a State>,
+    timestamp_format: StrftimeItems<'a>,
 }
 
 pub async fn read_sheet_data(state: Option<&State>) -> Result<Option<Wiring>, GoogleDataError> {
@@ -104,10 +108,12 @@ pub async fn read_sheet_data(state: Option<&State>) -> Result<Option<Wiring>, Go
 
         let spreadsheet_methods: SpreadsheetMethods<HttpsConnector<HttpConnector>> =
             hub.spreadsheets();
+        let timestamp_format = StrftimeItems::new(config.timestamp_format());
         let context = ParserContext {
             config,
             spreadsheet_methods,
             state,
+            timestamp_format,
         };
 
         let mut builder: GoogleSheetWireBuilder = Default::default();
@@ -185,15 +191,17 @@ impl GoogleSheetWireBuilder {
                     config.display(),
                     config.dmx_channels(),
                     config.relays(),
+                    config.connection_failed_counters(),
+                    config.errors(),
                 ],
                 [],
                 context.config.spreadsheet_id(),
                 config.sheet(),
                 config.range(),
             )
-                .await?;
-            #[derive(Ord, PartialOrd, Eq, PartialEq)]
-            struct BrickletRow {
+            .await?;
+            #[derive(Eq, PartialEq)]
+            struct BrickletRow<'a> {
                 endpoint_addr: IpAddr,
                 master_idx: Option<u8>,
                 connector: char,
@@ -203,6 +211,8 @@ impl GoogleSheetWireBuilder {
                 firmware_version: Version,
                 state: ConnectionState,
                 last_change: SystemTime,
+                connection_failed_counter: u32,
+                error_counters: &'a HashMap<Option<char>, SpitfpErrorCounters>,
             }
             let master_positions = state
                 .bricklets()
@@ -241,14 +251,17 @@ impl GoogleSheetWireBuilder {
                 .iter()
                 .filter_map(
                     |(
-                         uid,
-                         BrickletConnectionData {
-                             state,
-                             last_change,
-                             endpoint,
-                             metadata,
-                         },
-                     )| {
+                        uid,
+                        BrickletConnectionData {
+                            state,
+                            last_change,
+                            endpoint,
+                            metadata,
+                            connection_failed_counter,
+                            error_counters,
+                            session,
+                        },
+                    )| {
                         if state != &ConnectionState::Connected {
                             return None;
                         }
@@ -275,13 +288,22 @@ impl GoogleSheetWireBuilder {
                                     firmware_version: *firmware_version,
                                     state: *state,
                                     last_change: *last_change,
+                                    connection_failed_counter: *connection_failed_counter,
+                                    error_counters,
                                 }
                             },
                         )
                     },
                 )
                 .collect::<Vec<_>>();
-            rows.sort();
+            rows.sort_by(|r1, r2| {
+                r1.endpoint_addr
+                    .cmp(&r2.endpoint_addr)
+                    .then(r1.master_idx.cmp(&r2.master_idx))
+                    .then(r1.connector.cmp(&r2.connector))
+                    .then(r1.device_type.cmp(&r2.device_type))
+                    .then(r1.uid.cmp(&r2.uid))
+            });
 
             let rows = rows.into_iter().map(|row| {
                 let io_count: Option<u16> = self.io_bricklets.get(&row.uid).map(|v| {
@@ -292,9 +314,9 @@ impl GoogleSheetWireBuilder {
                         })
                         .sum()
                 });
-                let temperature_sensor = self.temperature_sensors.get(&row.uid).is_some();
-                let motion_detector = self.motion_detector_sensors.get(&row.uid).is_some();
-                let lcd_screen = self.lcd_screens.get(&row.uid).is_some();
+                let temperature_sensor = self.temperature_sensors.contains_key(&row.uid);
+                let motion_detector = self.motion_detector_sensors.contains_key(&row.uid);
+                let lcd_screen = self.lcd_screens.contains_key(&row.uid);
                 let dmx_count: Option<u16> = self.dmx_bricklets.get(&row.uid).map(|v| {
                     v.iter()
                         .map(|s| match s {
@@ -304,6 +326,41 @@ impl GoogleSheetWireBuilder {
                         })
                         .sum()
                 });
+                let mut error_description = String::new();
+                for (connection, counters) in row.error_counters {
+                    if counters.error_count_message_checksum > 0 {
+                        Self::append_counter(
+                            &mut error_description,
+                            *connection,
+                            "msg",
+                            counters.error_count_message_checksum,
+                        );
+                    }
+                    if counters.error_count_ack_checksum > 0 {
+                        Self::append_counter(
+                            &mut error_description,
+                            *connection,
+                            "ack",
+                            counters.error_count_ack_checksum,
+                        );
+                    }
+                    if counters.error_count_overflow > 0 {
+                        Self::append_counter(
+                            &mut error_description,
+                            *connection,
+                            "overflow",
+                            counters.error_count_overflow,
+                        );
+                    }
+                    if counters.error_count_frame > 0 {
+                        Self::append_counter(
+                            &mut error_description,
+                            *connection,
+                            "frame",
+                            counters.error_count_frame,
+                        );
+                    }
+                }
                 let relay_count = self.relays.get(&row.uid).map(|rs| rs.entries.len());
                 [
                     (&**self
@@ -327,6 +384,8 @@ impl GoogleSheetWireBuilder {
                     show_bool(lcd_screen),
                     dmx_count.into(),
                     relay_count.into(),
+                    row.connection_failed_counter.into(),
+                    error_description.into(),
                 ]
             });
             for data_row in rows {
@@ -354,6 +413,26 @@ impl GoogleSheetWireBuilder {
         Ok(())
     }
 
+    fn append_counter(
+        error_description: &mut String,
+        connection: Option<char>,
+        counter_name: &str,
+        counter: u32,
+    ) {
+        if !error_description.is_empty() {
+            error_description.push_str(", ")
+        }
+        error_description.push_str(counter_name);
+        if let Some(ch) = connection {
+            error_description.push('(');
+            error_description.push(ch);
+            error_description.push_str("): ");
+        } else {
+            error_description.push_str(": ")
+        }
+        error_description.push_str(&format!("{counter}"));
+    }
+
     fn find_connection(
         master_positions: &HashMap<Uid, Connection>,
         connected_uid: Uid,
@@ -362,8 +441,8 @@ impl GoogleSheetWireBuilder {
         let (master_idx, connector) = match master_positions.get(&connected_uid) {
             None => (None, position),
             Some(Connection::Master {
-                     position: master_position,
-                 }) => (Some(*master_position), position),
+                position: master_position,
+            }) => (Some(*master_position), position),
             Some(Connection::Isolator { parent, position }) => {
                 Self::find_connection(master_positions, *parent, *position)
             }
@@ -411,14 +490,14 @@ impl GoogleSheetWireBuilder {
             endpoints_config.sheet(),
             endpoints_config.range(),
         )
-            .await?
-            .filter_map(|([address, state, place], _)| {
-                address
-                    .get_content()
-                    .map(IpAddr::from_str)
-                    .and_then(Result::ok)
-                    .map(|ip| (ip, state, place.get_content().unwrap_or_default().into()))
-            }) {
+        .await?
+        .filter_map(|([address, state, place], _)| {
+            address
+                .get_content()
+                .map(IpAddr::from_str)
+                .and_then(Result::ok)
+                .map(|ip| (ip, state, place.get_content().unwrap_or_default().into()))
+        }) {
             self.endpoints.push(address);
             self.endpoint_names.insert(address, place);
             if let Some(update) = context
@@ -528,37 +607,37 @@ impl GoogleSheetWireBuilder {
             relay_configs.sheet(),
             relay_configs.range(),
         )
-            .await?
-            .filter_map(
-                |([room, idx, address, channel, sensor, button, state], _)| {
-                    if let (Some(room), Some(address), Some(channel)) = (
-                        room.get_content().map(Room::from_str).and_then(Result::ok),
-                        address
+        .await?
+        .filter_map(
+            |([room, idx, address, channel, sensor, button, state], _)| {
+                if let (Some(room), Some(address), Some(channel)) = (
+                    room.get_content().map(Room::from_str).and_then(Result::ok),
+                    address
+                        .get_content()
+                        .map(Uid::from_str)
+                        .and_then(Result::ok),
+                    channel.get_integer().map(|v| v as u8),
+                ) {
+                    Some((
+                        room,
+                        DeviceIdxCell(idx),
+                        address,
+                        channel,
+                        sensor
                             .get_content()
-                            .map(Uid::from_str)
-                            .and_then(Result::ok),
-                        channel.get_integer().map(|v| v as u8),
-                    ) {
-                        Some((
-                            room,
-                            DeviceIdxCell(idx),
-                            address,
-                            channel,
-                            sensor
-                                .get_content()
-                                .and_then(|k| self.heat_outputs_addresses.get(k))
-                                .copied(),
-                            button
-                                .get_content()
-                                .and_then(|k| self.single_button_adresses.get(k))
-                                .copied(),
-                            state,
-                        ))
-                    } else {
-                        None
-                    }
-                },
-            ) {
+                            .and_then(|k| self.heat_outputs_addresses.get(k))
+                            .copied(),
+                        button
+                            .get_content()
+                            .and_then(|k| self.single_button_adresses.get(k))
+                            .copied(),
+                        state,
+                    ))
+                } else {
+                    None
+                }
+            },
+        ) {
             if let Some(temp_input) = temperature {
                 relay_channels
                     .entry(uid)
@@ -575,7 +654,13 @@ impl GoogleSheetWireBuilder {
                     ring_button,
                 });
             }
-            update_state_new(|v| self.updates.push(v), context.state, &old_state, uid);
+            update_state_new(
+                |v| self.updates.push(v),
+                context.state,
+                &old_state,
+                uid,
+                &context.timestamp_format,
+            );
         }
         struct RingRow<'a> {
             idx: DeviceIdxCell<'a>,
@@ -689,10 +774,11 @@ impl GoogleSheetWireBuilder {
             );
             if let Some(uid) = touchscreen {
                 update_state_new(
-                    |s| self.updates.push(s), context.state, &touchscreen_state, uid, );
+                    |s| self.updates.push(s), context.state, &touchscreen_state, uid
+                    , &context.timestamp_format);
             }
             if let Some(uid) = temp_sensor {
-                update_state_new(|s| self.updates.push(s), context.state, &temperature_state, uid)
+                update_state_new(|s| self.updates.push(s), context.state, &temperature_state, uid,&context.timestamp_format )
             }
         }
         let controller_rows = fill_device_idx(|s| self.updates.push(s), device_ids_of_rooms);
@@ -787,21 +873,21 @@ impl GoogleSheetWireBuilder {
             md_config.sheet(),
             md_config.range(),
         )
-            .await?
-            .filter_map(|([room, address, id, idx, state], _)| {
-                if let (Some(room), Some(address), Some(id)) = (
-                    room.get_content().map(Room::from_str).and_then(Result::ok),
-                    address
-                        .get_content()
-                        .map(Uid::from_str)
-                        .and_then(Result::ok),
-                    id.get_content().map(Into::<Box<str>>::into),
-                ) {
-                    Some((room, address, id, DeviceIdxCell(idx), state))
-                } else {
-                    None
-                }
-            }) {
+        .await?
+        .filter_map(|([room, address, id, idx, state], _)| {
+            if let (Some(room), Some(address), Some(id)) = (
+                room.get_content().map(Room::from_str).and_then(Result::ok),
+                address
+                    .get_content()
+                    .map(Uid::from_str)
+                    .and_then(Result::ok),
+                id.get_content().map(Into::<Box<str>>::into),
+            ) {
+                Some((room, address, id, DeviceIdxCell(idx), state))
+            } else {
+                None
+            }
+        }) {
             device_ids_of_rooms
                 .entry(room)
                 .or_default()
@@ -815,6 +901,7 @@ impl GoogleSheetWireBuilder {
                 context.state,
                 &state_cell,
                 device_address,
+                &context.timestamp_format,
             );
         }
         let motion_detector_rows = fill_device_idx(|v| self.updates.push(v), device_ids_of_rooms);
@@ -847,7 +934,7 @@ impl GoogleSheetWireBuilder {
             light_templates.sheet(),
             light_templates.range(),
         )
-            .await?
+        .await?
         {
             if let (Some(name), Some(discriminator)) = (
                 name.get_content().map(Into::<Box<str>>::into),
@@ -920,7 +1007,7 @@ impl GoogleSheetWireBuilder {
             light_config.sheet(),
             light_config.range(),
         )
-            .await?
+        .await?
         {
             if let (
                 Some(room),
@@ -980,6 +1067,7 @@ impl GoogleSheetWireBuilder {
                     context.state,
                     &old_state,
                     device_address,
+                    &context.timestamp_format,
                 );
                 //info!("Room: {room:?}, idx: {coordinates}");
             }
@@ -1135,7 +1223,7 @@ impl GoogleSheetWireBuilder {
             button_templates.sheet(),
             button_templates.range(),
         )
-            .await?
+        .await?
         {
             if let (Some(name), Some(sub_devices), Some(discriminator)) = (
                 name.get_content().map(<&str>::into),
@@ -1193,7 +1281,7 @@ impl GoogleSheetWireBuilder {
             button_config.sheet(),
             button_config.range(),
         )
-            .await?
+        .await?
         {
             if let (
                 Some(room),
@@ -1222,6 +1310,7 @@ impl GoogleSheetWireBuilder {
                     context.state,
                     &state_data,
                     device_address,
+                    &context.timestamp_format,
                 );
                 button_ids_of_rooms
                     .entry(room)
@@ -1243,7 +1332,7 @@ impl GoogleSheetWireBuilder {
                 .or_default();
             let mut current_input_idx = button_row.first_input_idx;
             for (subdevice_id, subdevice_name) in
-            button_row.button_template.sub_devices.iter().enumerate()
+                button_row.button_template.sub_devices.iter().enumerate()
             {
                 let device_key = format!("{}, {}", button_row.button_id, subdevice_name);
 
@@ -1338,24 +1427,29 @@ fn update_state_new<F: FnMut(ValueRange)>(
     current_state: Option<&State>,
     state_cell: &GoogleCellData,
     uid: Uid,
+    timestamp_format: &StrftimeItems,
 ) {
-    if let Some(current_state) = current_state {
+    if let Some(update) = if let Some(current_state) = current_state {
         let new_text = match current_state.bricklet(&uid) {
-            None => "Not found".to_string(),
+            None => "".to_string(),
             Some(&BrickletConnectionData {
                 ref state,
                 last_change,
                 endpoint,
                 ref metadata,
+                connection_failed_counter,
+                ref error_counters,
+                session,
             }) => {
                 let timestamp = DateTime::<Local>::from(last_change);
+                let timestamp = timestamp.format_with_items(timestamp_format.clone().into_iter());
                 if let Some(BrickletMetadata {
-                                connected_uid,
-                                position,
-                                hardware_version,
-                                firmware_version,
-                                device_identifier: _,
-                            }) = metadata
+                    connected_uid,
+                    position,
+                    hardware_version,
+                    firmware_version,
+                    device_identifier: _,
+                }) = metadata
                 {
                     format!("{state}, {timestamp}, {endpoint}; {connected_uid}, {position}, hw: {}, fw: {}", hardware_version, firmware_version)
                 } else {
@@ -1363,9 +1457,11 @@ fn update_state_new<F: FnMut(ValueRange)>(
                 }
             }
         };
-        if let Some(update) = state_cell.create_content_update(&new_text) {
-            updater(update);
-        }
+        state_cell.create_content_update(&new_text)
+    } else {
+        state_cell.create_content_update("")
+    } {
+        updater(update);
     }
 }
 
