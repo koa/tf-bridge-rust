@@ -47,7 +47,7 @@ use crate::{
         state::StateUpdateMessage,
         wiring::{Orientation, ScreenSettings},
     },
-    devices::display::Lcd128x64BrickletDisplay,
+    devices::tinkerforge::display::Lcd128x64BrickletDisplay,
     icons, util,
 };
 use crate::metrics::report_spitf_error_counters;

@@ -25,7 +25,7 @@ use crate::{
         state::{State, StateUpdateMessage},
         wiring::{Controllers, MotionDetector, Wiring},
     },
-    devices::activate_devices,
+    devices::tinkerforge::activate_devices,
     snapshot::{read_snapshot, write_snapshot},
     terminator::{AbortHandleTerminator, JoinHandleTerminator},
 };

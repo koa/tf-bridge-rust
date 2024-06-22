@@ -238,7 +238,7 @@ async fn io_16_v2_loop(
 async fn io_16_loop(
     termination_receiver: LifeLineEnd,
     channel_settings: [ChannelSetting; 16],
-    button_event_stream: impl Stream<Item=IoMessage> + Sized + Unpin,
+    button_event_stream: impl Stream<Item = IoMessage> + Sized + Unpin,
 ) -> Result<(), IoHandlerError> {
     let (rx, tx) = mpsc::channel(2);
     let mut channel_timer: [Option<JoinHandle<()>>; 16] = <[Option<JoinHandle<()>>; 16]>::default();
@@ -367,7 +367,7 @@ pub enum IoHandlerError {
 
 #[cfg(test)]
 mod test {
-    use crate::devices::io_handler::{ByteMaskIterator, IoMessage};
+    use crate::tinkerforge::io_handler::{ByteMaskIterator, IoMessage};
 
     #[test]
     fn test_byte_mask() {
