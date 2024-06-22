@@ -2443,18 +2443,18 @@ checksum = "61697e0a1c7e512e84a621326239844a24d8207b4669b41bc18b32ea5cbf988b"
 
 [[package]]
 name = "serde"
-version = "1.0.202"
+version = "1.0.203"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "226b61a0d411b2ba5ff6d7f73a476ac4f8bb900373459cd00fab8512828ba395"
+checksum = "7253ab4de971e72fb7be983802300c30b5a7f0c2e56fab8abfc6a214307c0094"
 dependencies = [
  "serde_derive",
 ]
 
 [[package]]
 name = "serde_derive"
-version = "1.0.202"
+version = "1.0.203"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6048858004bcff69094cd972ed40a32500f153bd3be9f716b2eed2e8217c4838"
+checksum = "500cbc0ebeb6f46627f50f3f5811ccf6bf00643be300b4c3eabc0ef55dc5b5ba"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2811,9 +2811,9 @@ dependencies = [
 
 [[package]]
 name = "tinkerforge-async"
-version = "2.0.8-SN1"
+version = "2.0.8-SN2"
 source = "sparse+https://kellnr.berg-turbenthal.ch/api/v1/crates/"
-checksum = "105b1a68b018f51136072fddffde7aa00162912b49576044bbf1830d54c86ceb"
+checksum = "9adfc8c05506fed5083adfe569aa779661202f4ea841933259e64ec122b57ac9"
 dependencies = [
  "futures-core",
  "prettyplease",
@@ -2825,9 +2825,9 @@ dependencies = [
 
 [[package]]
 name = "tinkerforge-base"
-version = "0.1.0"
+version = "0.1.1"
 source = "sparse+https://kellnr.berg-turbenthal.ch/api/v1/crates/"
-checksum = "e2cd94c6b559e71b0ea227495112ce564d868ad81117779d20c28892845bf17b"
+checksum = "ca49ad857c13f73fef7fe3e4cca867810df830ef57164c972d95d7793ca952a3"
 dependencies = [
  "byteorder",
  "const-str",
@@ -2849,9 +2849,9 @@ dependencies = [
 
 [[package]]
 name = "tinkerforge-generator"
-version = "0.1.0"
+version = "0.1.1"
 source = "sparse+https://kellnr.berg-turbenthal.ch/api/v1/crates/"
-checksum = "4e3b3411f1a91da77003633a6e235ef1b88306630e8f2c647ec065a7ccb0bfa1"
+checksum = "f9482b7cadaa6613c868fe183bd9d7f89687673a7a2d11002831f6baa01666ce"
 dependencies = [
  "convert_case 0.6.0",
  "prettyplease",
