@@ -14,7 +14,7 @@ use tinkerforge_async::{
     io_16_v_2::{Io16V2Bricklet, SetInputValueCallbackConfigurationRequest},
 };
 use tokio::{sync::mpsc, task::JoinHandle, time::sleep};
-use tokio_stream::{empty, StreamExt, wrappers::ReceiverStream};
+use tokio_stream::{empty, wrappers::ReceiverStream, StreamExt};
 use tokio_util::either::Either;
 
 use crate::{

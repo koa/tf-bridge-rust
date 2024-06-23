@@ -5,7 +5,6 @@ use thiserror::Error;
 use tinkerforge_async::{
     base58::Uid,
     byte_converter::ParsedOrRaw,
-    DeviceIdentifier,
     dmx::DmxBricklet,
     error::TinkerforgeError,
     industrial_quad_relay_v_2::IndustrialQuadRelayV2Bricklet,
@@ -17,6 +16,7 @@ use tinkerforge_async::{
     master::MasterBrick,
     motion_detector_v_2::MotionDetectorV2Bricklet,
     temperature_v_2::TemperatureV2Bricklet,
+    DeviceIdentifier,
 };
 use tokio::{
     pin,
@@ -24,7 +24,7 @@ use tokio::{
     task,
     time::{interval, sleep},
 };
-use tokio_stream::{StreamExt, wrappers::IntervalStream};
+use tokio_stream::{wrappers::IntervalStream, StreamExt};
 
 use crate::{
     data::{

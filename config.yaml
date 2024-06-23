@@ -4,12 +4,21 @@ tinkerforge:
     #- address: 10.192.64.23
     #- address: 10.192.66.26
     - address: 127.0.0.1
+shelly:
+  endpoints:
+    - address: 10.192.5.6
 google-sheet:
   key_file: sa-development.json
   spreadsheet_id: 1a2OKCYMOUxE7PfjLjPgvIAf7WY9Y6uTMiXkEKHLlDoo
   timestamp_format: '%d.%b %H:%M'
-  endpoints:
+  tinkerforge_endpoints:
     sheet: Tinkerforge Endpoints
+    range: A:F
+    address: IP-Address
+    state: Status Dev
+    place: Place
+  shelly_endpoints:
+    sheet: Shelly Endpoints
     range: A:F
     address: IP-Address
     state: Status Dev

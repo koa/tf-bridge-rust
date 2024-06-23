@@ -1,6 +1,6 @@
 use lazy_static::lazy_static;
 use log::error;
-use prometheus::{GaugeVec, IntGaugeVec, register_gauge_vec, register_int_gauge_vec};
+use prometheus::{register_gauge_vec, register_int_gauge_vec, GaugeVec, IntGaugeVec};
 use tinkerforge_async::base58::Uid;
 use tokio::sync::mpsc::Sender;
 

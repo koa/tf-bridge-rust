@@ -2,17 +2,17 @@ use std::time::Duration;
 
 use log::error;
 use tinkerforge_async::{error::TinkerforgeError, isolator::IsolatorBricklet};
+use tokio::sync::mpsc::Sender;
 use tokio::{
     sync::mpsc::{self, Receiver},
     time::sleep,
 };
-use tokio::sync::mpsc::Sender;
 
+use crate::data::state::StateUpdateMessage;
 use crate::{
     metrics::{report_device_temperature, report_spitf_error_counters},
     terminator::LifeLineEnd,
 };
-use crate::data::state::StateUpdateMessage;
 
 pub fn handle_isolator(
     bricklet: IsolatorBricklet,

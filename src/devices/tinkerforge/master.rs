@@ -2,13 +2,14 @@ use std::time::Duration;
 
 use log::{error, info};
 use tinkerforge_async::{error::TinkerforgeError, master::MasterBrick};
+use tokio::sync::mpsc::Sender;
 use tokio::{
     sync::mpsc::{self, Receiver},
     time::sleep,
 };
-use tokio::sync::mpsc::Sender;
 use tokio_stream::StreamExt;
 
+use crate::data::state::StateUpdateMessage;
 use crate::{
     metrics::{
         report_current, report_device_temperature, report_ethernet_traffic,
@@ -16,7 +17,6 @@ use crate::{
     },
     terminator::LifeLineEnd,
 };
-use crate::data::state::StateUpdateMessage;
 
 pub fn handle_master(
     bricklet: MasterBrick,

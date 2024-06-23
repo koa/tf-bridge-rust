@@ -13,6 +13,7 @@ use crate::data::registry::{
 pub struct Wiring {
     pub controllers: Controllers,
     pub tinkerforge_devices: TinkerforgeDevices,
+    pub shelly_devices: ShellyDevices,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
@@ -72,6 +73,10 @@ pub struct TinkerforgeDevices {
     pub motion_detectors: BTreeMap<Uid, MotionDetectorSettings>,
     pub relays: BTreeMap<Uid, RelaySettings>,
     pub temperature_sensors: BTreeMap<Uid, TemperatureSettings>,
+}
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, Ord, PartialOrd)]
+pub struct ShellyDevices {
+    pub endpoints: Box<[IpAddr]>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Ord, PartialOrd)]
@@ -157,6 +162,7 @@ mod test {
         time::Duration,
     };
 
+    use crate::data::wiring::ShellyDevices;
     use crate::{
         data::{
             registry::{BrightnessKey, DualButtonKey, LightColorKey},
@@ -219,6 +225,9 @@ mod test {
                 motion_detectors: Default::default(),
                 relays: Default::default(),
                 temperature_sensors: Default::default(),
+            },
+            shelly_devices: ShellyDevices {
+                endpoints: Box::new(["10.192.5.6".parse().expect("Cannot parse ip address")]),
             },
         };
         let yaml_data = serde_yaml::to_string(&data).unwrap();

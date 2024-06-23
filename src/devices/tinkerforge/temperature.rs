@@ -10,24 +10,20 @@ use tinkerforge_async::{
     },
 };
 use tinkerforge_async::base58::Uid;
-use tokio::sync::mpsc;
-use tokio::sync::mpsc::error::SendError;
-use tokio::sync::mpsc::Sender;
-use tokio::task::JoinHandle;
-use tokio::time::sleep;
-use tokio_stream::StreamExt;
-use tokio_stream::wrappers::ReceiverStream;
+use tokio::{
+    sync::mpsc::{self, Sender},
+    task::JoinHandle,
+};
+use tokio_stream::{StreamExt, wrappers::ReceiverStream};
 
 use crate::{
     data::{
         registry::{EventRegistry, TemperatureKey},
-        state::StateUpdateMessage,
+        state::{SpitfpErrorCounters, StateUpdateMessage},
     },
     terminator::LifeLineEnd,
-    util,
+    util::{self, TimerHandle},
 };
-use crate::data::state::SpitfpErrorCounters;
-use crate::util::TimerHandle;
 
 pub fn handle_temperature(
     bricklet: TemperatureV2Bricklet,

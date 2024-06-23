@@ -1,8 +1,8 @@
 use embedded_graphics::{
-    Pixel,
     pixelcolor::BinaryColor,
     prelude::{Dimensions, DrawTarget, Point, Size},
     primitives::Rectangle,
+    Pixel,
 };
 use strum_macros::EnumIter;
 use tinkerforge_async::error::TinkerforgeError;
@@ -282,7 +282,7 @@ mod test {
     use embedded_graphics::prelude::Point;
     use strum::IntoEnumIterator;
 
-    use crate::tinkerforge::display::{Orientation, translate_point, translate_reverse};
+    use crate::tinkerforge::display::{translate_point, translate_reverse, Orientation};
 
     #[test]
     fn test_translate_and_reverse() {

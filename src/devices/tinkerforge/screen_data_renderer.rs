@@ -18,8 +18,8 @@ use embedded_graphics::{
 };
 use log::{error, info};
 use simple_layout::prelude::{
-    bordered, center, DashedLine, expand, horizontal_layout, Layoutable, optional_placement, owned_text,
-    padding, RoundedLine, scale, vertical_layout,
+    bordered, center, expand, horizontal_layout, optional_placement, owned_text, padding, scale,
+    vertical_layout, DashedLine, Layoutable, RoundedLine,
 };
 use thiserror::Error;
 use tinkerforge_async::{
@@ -27,20 +27,22 @@ use tinkerforge_async::{
     error::TinkerforgeError,
     lcd_128_x_64::{Lcd128X64Bricklet, TouchPositionCallback},
 };
+use tokio::sync::mpsc::Sender;
 use tokio::{
     join,
     sync::mpsc,
     task::JoinHandle,
     time::{interval, sleep},
 };
-use tokio::sync::mpsc::Sender;
 use tokio_stream::{
     empty,
-    StreamExt,
-    StreamNotifyClose, wrappers::{IntervalStream, ReceiverStream},
+    wrappers::{IntervalStream, ReceiverStream},
+    StreamExt, StreamNotifyClose,
 };
 use tokio_util::either::Either;
 
+use crate::metrics::report_spitf_error_counters;
+use crate::terminator::LifeLineEnd;
 use crate::{
     data::{
         registry::EventRegistry,
@@ -50,8 +52,6 @@ use crate::{
     devices::tinkerforge::display::Lcd128x64BrickletDisplay,
     icons, util,
 };
-use crate::metrics::report_spitf_error_counters;
-use crate::terminator::LifeLineEnd;
 
 const TEXT_STYLE: MonoTextStyle<BinaryColor> = MonoTextStyle::new(&FONT_6X12, BinaryColor::On);
 const BIG_TEXT_STYLE: MonoTextStyle<BinaryColor> = MonoTextStyle::new(&FONT_10X20, BinaryColor::On);

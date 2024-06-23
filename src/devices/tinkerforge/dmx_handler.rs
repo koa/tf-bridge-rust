@@ -3,12 +3,12 @@ use std::num::Saturating;
 use futures::stream::SelectAll;
 use log::{error, info};
 use thiserror::Error;
+use tinkerforge_async::dmx::WriteFrameRequest;
 use tinkerforge_async::{
     base58::Base58Error,
     dmx::{DmxBricklet, DmxMode, SetFrameCallbackConfigRequest},
     error::TinkerforgeError,
 };
-use tinkerforge_async::dmx::WriteFrameRequest;
 use tokio::sync::mpsc;
 use tokio_stream::{Stream, StreamExt};
 use tokio_util::either::Either;

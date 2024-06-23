@@ -23,6 +23,27 @@ pub struct ServerSettings {
 pub struct Tinkerforge {
     endpoints: Box<[TinkerforgeEndpoint]>,
 }
+#[derive(Debug, Deserialize)]
+pub struct Shelly {
+    endpoints: Box<[ShellyEndpoint]>,
+}
+
+impl Shelly {
+    pub fn endpoints(&self) -> &Box<[ShellyEndpoint]> {
+        &self.endpoints
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ShellyEndpoint {
+    address: IpAddr,
+}
+
+impl ShellyEndpoint {
+    pub fn address(&self) -> IpAddr {
+        self.address
+    }
+}
 
 impl Tinkerforge {
     pub fn endpoints(&self) -> &[TinkerforgeEndpoint] {
@@ -51,7 +72,8 @@ pub struct GoogleSheet {
     key_data: Option<Box<str>>,
     spreadsheet_id: Box<str>,
     timestamp_format: Box<str>,
-    endpoints: GoogleEndpointData,
+    tinkerforge_endpoints: GoogleEndpointData,
+    shelly_endpoints: GoogleEndpointData,
     light: GoogleLightData,
     light_templates: GoogleLightTemplateData,
     buttons: GoogleButtonData,
@@ -241,8 +263,11 @@ impl GoogleSheet {
         &self.relays
     }
 
-    pub fn endpoints(&self) -> &GoogleEndpointData {
-        &self.endpoints
+    pub fn tinkerforge_endpoints(&self) -> &GoogleEndpointData {
+        &self.tinkerforge_endpoints
+    }
+    pub fn shelly_endpoints(&self) -> &GoogleEndpointData {
+        &self.shelly_endpoints
     }
 
     pub fn available_bricklets(&self) -> &GoogleAvailableBricklets {
@@ -551,6 +576,7 @@ impl GoogleAvailableBricklets {
 pub struct Settings {
     pub server: ServerSettings,
     pub tinkerforge: Tinkerforge,
+    pub shelly: Shelly,
     pub google_sheet: Option<GoogleSheet>,
 }
 
@@ -592,6 +618,7 @@ fn create_settings() -> Result<Settings, ConfigError> {
     Ok(Settings {
         server: cfg.get("server")?,
         tinkerforge: cfg.get("tinkerforge")?,
+        shelly: cfg.get("shelly")?,
         google_sheet: cfg.get("google-sheet")?,
     })
 }

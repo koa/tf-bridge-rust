@@ -1,6 +1,6 @@
 use std::{error::Error, fmt::Debug, fs::File, future::Future, time::Duration};
 
-use actix_web::{App, get, HttpServer};
+use actix_web::{get, App, HttpServer};
 use actix_web_prometheus::PrometheusMetricsBuilder;
 use env_logger::{Env, TimestampPrecision};
 use log::{error, info};
@@ -10,7 +10,7 @@ use tokio::{
     sync::mpsc::{self, Sender},
     time::sleep,
 };
-use tokio_stream::{once, StreamExt, wrappers::ReceiverStream};
+use tokio_stream::{once, wrappers::ReceiverStream, StreamExt};
 
 use crate::{
     controller::{
@@ -21,11 +21,11 @@ use crate::{
     data::{
         google_data::read_sheet_data,
         registry::EventRegistry,
-        settings::{CONFIG, Tinkerforge},
+        settings::{Shelly, Tinkerforge, CONFIG},
         state::{State, StateUpdateMessage},
         wiring::{Controllers, MotionDetector, Wiring},
     },
-    devices::tinkerforge::activate_devices,
+    devices::{shelly, tinkerforge},
     snapshot::{read_snapshot, write_snapshot},
     terminator::{AbortHandleTerminator, JoinHandleTerminator},
 };
@@ -55,6 +55,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let bind_addr = CONFIG.server.bind_address();
     let mgmt_port = CONFIG.server.mgmt_port();
     let tinkerforge = &CONFIG.tinkerforge;
+    let shelly = &CONFIG.shelly;
     let state_file = CONFIG.server.state_file();
     let setup_file = CONFIG.server.setup_file();
 
@@ -76,7 +77,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let snapshot_storage_thread = start_snapshot_thread(&event_registry, state_file);
     let mut terminate_signal = signal(SignalKind::terminate())?;
-    let config_update_future = config_update_loop(tinkerforge, setup_file, event_registry);
+    let config_update_future = config_update_loop(tinkerforge, shelly, setup_file, event_registry);
     select! {
         _ = snapshot_storage_thread =>{info!("Snapshot storage thread terminated");}
         status =
@@ -111,12 +112,14 @@ enum MainLoopEvent {
 
 async fn config_update_loop(
     tinkerforge: &Tinkerforge,
+    shelly: &Shelly,
     setup_file: &str,
     event_registry: EventRegistry,
 ) -> Result<(), Box<dyn Error>> {
     let mut current_wiring = Wiring::default();
     let mut running_controllers = Vec::new();
-    let mut running_connections = Vec::new();
+    let mut running_tinkerforge_connections = Vec::new();
+    let mut running_shelly_connections = Vec::new();
     let (tx, rx) = mpsc::channel(100);
     let (main_tx, main_rx) = mpsc::channel(3);
     let mut stream = once(MainLoopEvent::FetchConfig)
@@ -182,11 +185,20 @@ async fn config_update_loop(
                     .await;
                 }
                 if wiring.tinkerforge_devices != current_wiring.tinkerforge_devices {
-                    activate_devices(
+                    tinkerforge::activate_devices(
                         tinkerforge,
                         &event_registry,
-                        &mut running_connections,
+                        &mut running_tinkerforge_connections,
                         wiring.tinkerforge_devices.clone(),
+                        tx.clone(),
+                    );
+                }
+                if wiring.shelly_devices != current_wiring.shelly_devices {
+                    shelly::activate_devices(
+                        shelly,
+                        &event_registry,
+                        &mut running_shelly_connections,
+                        wiring.shelly_devices.clone(),
                         tx.clone(),
                     );
                 }

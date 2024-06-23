@@ -10,13 +10,12 @@ use std::{
     time::SystemTime,
     vec::IntoIter,
 };
-use std::cmp::Ordering;
 
-use chrono::{DateTime, Local};
 use chrono::format::StrftimeItems;
+use chrono::{DateTime, Local};
 use google_sheets4::{
     api::{BatchUpdateValuesRequest, CellData, SpreadsheetMethods, ValueRange},
-    hyper::{Client, client::HttpConnector},
+    hyper::{client::HttpConnector, Client},
     hyper_rustls::{self, HttpsConnector},
     oauth2::ServiceAccountAuthenticator,
     Sheets,
@@ -24,27 +23,29 @@ use google_sheets4::{
 use log::{debug, error, info};
 use serde::Deserialize;
 use thiserror::Error;
-use tinkerforge_async::{base58::Uid, DeviceIdentifier, ip_connection::Version};
+use tinkerforge_async::{base58::Uid, ip_connection::Version, DeviceIdentifier};
 
+use crate::data::settings::GoogleEndpointData;
+use crate::data::state::SpitfpErrorCounters;
+use crate::data::wiring::ShellyDevices;
 use crate::{
     data::{
-        DeviceInRoom,
         registry::{
             BrightnessKey, ClockKey, DualButtonKey, LightColorKey, SingleButtonKey,
             SwitchOutputKey, TemperatureKey,
         },
-        Room,
-        settings::{CONFIG, GoogleError, GoogleSheet},
-        state::{BrickletConnectionData, BrickletMetadata, ConnectionState, State}, SubDeviceInRoom, wiring::{
+        settings::{GoogleError, GoogleSheet, CONFIG},
+        state::{BrickletConnectionData, BrickletMetadata, ConnectionState, State},
+        wiring::{
             ButtonSetting, Controllers, DmxConfigEntry, DmxSettings, DualInputDimmer,
             DualInputSwitch, HeatController, IoSettings, MotionDetector, MotionDetectorSettings,
             Orientation, RelayChannelEntry, RelaySettings, RingController, ScreenSettings,
             TemperatureSettings, TinkerforgeDevices, Wiring,
         },
+        DeviceInRoom, Room, SubDeviceInRoom,
     },
     util::kelvin_2_mireds,
 };
-use crate::data::state::SpitfpErrorCounters;
 
 #[derive(Error, Debug)]
 pub enum GoogleDataError {
@@ -117,7 +118,8 @@ pub async fn read_sheet_data(state: Option<&State>) -> Result<Option<Wiring>, Go
         };
 
         let mut builder: GoogleSheetWireBuilder = Default::default();
-        builder.parse_endpoints(&context).await?;
+        builder.parse_tinkerforge_endpoints(&context).await?;
+        builder.parse_shelly_endpoints(&context).await?;
         builder.parse_buttons(&context).await?;
         builder.parse_motion_detectors(&context).await?;
         builder.parse_controllers(&context).await?;
@@ -142,7 +144,8 @@ struct GoogleSheetWireBuilder {
     temperature_sensors: BTreeMap<Uid, TemperatureSettings>,
     motion_detector_sensors: BTreeMap<Uid, MotionDetectorSettings>,
     relays: BTreeMap<Uid, RelaySettings>,
-    endpoints: Vec<IpAddr>,
+    tinkerforge_endpoints: Vec<IpAddr>,
+    shelly_endpoints: Vec<IpAddr>,
 
     dual_input_dimmers: Vec<DualInputDimmer>,
     dual_input_switches: Vec<DualInputSwitch>,
@@ -473,11 +476,41 @@ impl GoogleSheetWireBuilder {
         Ok(())
     }
 
-    async fn parse_endpoints<'a>(
+    async fn parse_tinkerforge_endpoints<'a>(
         &'a mut self,
         context: &'a ParserContext<'a>,
     ) -> Result<(), GoogleDataError> {
-        let endpoints_config = context.config.endpoints();
+        let endpoints_config = context.config.tinkerforge_endpoints();
+        for endpoint in self
+            .parse_ip_endpoints(context, endpoints_config)
+            .await?
+            .iter()
+        {
+            self.tinkerforge_endpoints.push(*endpoint);
+        }
+        Ok(())
+    }
+    async fn parse_shelly_endpoints<'a>(
+        &'a mut self,
+        context: &'a ParserContext<'a>,
+    ) -> Result<(), GoogleDataError> {
+        let endpoints_config = context.config.shelly_endpoints();
+        for endpoint in self
+            .parse_ip_endpoints(context, endpoints_config)
+            .await?
+            .iter()
+        {
+            self.shelly_endpoints.push(*endpoint);
+        }
+        Ok(())
+    }
+
+    async fn parse_ip_endpoints<'a>(
+        &'a mut self,
+        context: &'a ParserContext<'a>,
+        endpoints_config: &GoogleEndpointData,
+    ) -> Result<Box<[IpAddr]>, GoogleDataError> {
+        let mut target_endpoints = Vec::new();
         for (address, state_cell, place) in GoogleTable::connect(
             &context.spreadsheet_methods,
             [
@@ -498,7 +531,7 @@ impl GoogleSheetWireBuilder {
                 .and_then(Result::ok)
                 .map(|ip| (ip, state, place.get_content().unwrap_or_default().into()))
         }) {
-            self.endpoints.push(address);
+            target_endpoints.push(address);
             self.endpoint_names.insert(address, place);
             if let Some(update) = context
                 .state
@@ -515,7 +548,7 @@ impl GoogleSheetWireBuilder {
                 self.updates.push(update);
             }
         }
-        Ok(())
+        Ok(target_endpoints.into_boxed_slice())
     }
 
     fn build_wiring(self) -> Wiring {
@@ -526,7 +559,8 @@ impl GoogleSheetWireBuilder {
             temperature_sensors,
             motion_detector_sensors,
             relays,
-            mut endpoints,
+            mut tinkerforge_endpoints,
+            mut shelly_endpoints,
             mut dual_input_dimmers,
             mut dual_input_switches,
             mut motion_detectors,
@@ -540,7 +574,8 @@ impl GoogleSheetWireBuilder {
         motion_detectors.sort();
         heat_controllers.sort();
         ring_controllers.sort();
-        endpoints.sort();
+        tinkerforge_endpoints.sort();
+        shelly_endpoints.sort();
         Wiring {
             controllers: Controllers {
                 dual_input_dimmers: dual_input_dimmers.into_boxed_slice(),
@@ -550,7 +585,7 @@ impl GoogleSheetWireBuilder {
                 ring_controllers: ring_controllers.into_boxed_slice(),
             },
             tinkerforge_devices: TinkerforgeDevices {
-                endpoints: endpoints.into_boxed_slice(),
+                endpoints: tinkerforge_endpoints.into_boxed_slice(),
                 lcd_screens,
                 dmx_bricklets: dmx_bricklets
                     .into_iter()
@@ -579,6 +614,9 @@ impl GoogleSheetWireBuilder {
                 motion_detectors: motion_detector_sensors,
                 relays,
                 temperature_sensors,
+            },
+            shelly_devices: ShellyDevices {
+                endpoints: shelly_endpoints.into_boxed_slice(),
             },
         }
     }
@@ -1843,7 +1881,7 @@ mod test {
     use env_logger::Env;
     use log::{error, info};
 
-    use crate::data::google_data::{CellCoordinates, read_sheet_data};
+    use crate::data::google_data::{read_sheet_data, CellCoordinates};
 
     #[test]
     fn format_coordinates() {

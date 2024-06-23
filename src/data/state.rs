@@ -5,8 +5,8 @@ use std::{
     time::SystemTime,
 };
 
-use tinkerforge_async::{base58::Uid, ip_connection::Version};
 use tinkerforge_async::DeviceIdentifier;
+use tinkerforge_async::{base58::Uid, ip_connection::Version};
 
 #[derive(Default, Debug)]
 pub struct State {

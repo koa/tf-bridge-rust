@@ -1,12 +1,12 @@
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 use log::info;
 use tokio::{
     sync::{mpsc, watch},
     task::{AbortHandle, JoinHandle},
 };
-use tokio_stream::{Stream, StreamExt, wrappers::WatchStream};
+use tokio_stream::{wrappers::WatchStream, Stream, StreamExt};
 
 pub struct TestamentSender(Option<watch::Sender<Option<()>>>);
 
