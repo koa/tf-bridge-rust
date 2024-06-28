@@ -25,7 +25,9 @@ mod cloud;
 mod eth;
 mod input;
 mod light;
+mod mqtt;
 mod shelly;
+mod switch;
 
 pub fn activate_devices(
     shelly: &Shelly,

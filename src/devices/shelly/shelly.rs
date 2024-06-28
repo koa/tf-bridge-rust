@@ -1,7 +1,7 @@
 use jsonrpsee::proc_macros::rpc;
 use serde::Deserialize;
 
-use crate::devices::shelly::{ble, cloud, eth, input, light};
+use crate::devices::shelly::{ble, cloud, eth, input, light, mqtt, switch};
 
 #[rpc(client)]
 pub trait Shelly {
@@ -63,6 +63,8 @@ pub enum ComponentEntry {
     Cloud(cloud::Component),
     Eth(eth::Component),
     Light(light::Component),
+    Mqtt(mqtt::Component),
+    Switch(switch::Component),
 }
 
 #[cfg(test)]
@@ -73,8 +75,9 @@ mod test {
     use serde_json::json;
 
     use crate::devices::shelly::{
-        ble, cloud, eth, input, light,
+        ble, cloud, eth, input, light, mqtt,
         shelly::{ComponentEntry, GetComponentsResponse},
+        switch,
     };
     use crate::devices::shelly::light::{
         ActiveEnergy, ButtonDoublePush, ButtonPresets, InitialState, LightMode, NightMode,
@@ -175,6 +178,55 @@ mod test {
             panic!("Wrong component: {entry:?}");
         }
     }
+    #[test]
+    fn test_mqtt() {
+        let entry = serde_json::from_value::<ComponentEntry>(json!(                    {
+            "key": "mqtt",
+            "status": {
+                "connected": false
+            },
+            "config": {
+                "enable": false,
+                "server": null,
+                "client_id": "shellypro4pm-34987a47a1dc",
+                "user": null,
+                "ssl_ca": null,
+                "topic_prefix": "shellypro4pm-34987a47a1dc",
+                "rpc_ntf": true,
+                "status_ntf": false,
+                "use_client_cert": false,
+                "enable_rpc": true,
+                "enable_control": true
+            }
+        }))
+        .expect("Cannot parse Input Component");
+        if let ComponentEntry::Mqtt(mqtt::Component {
+            key: _,
+            status,
+            config,
+        }) = entry
+        {
+            assert_eq!(status, mqtt::Status { connected: false });
+            assert_eq!(
+                config,
+                mqtt::Configuration {
+                    enable: false,
+                    server: None,
+                    client_id: Some("shellypro4pm-34987a47a1dc".into()),
+                    user: None,
+                    ssl_ca: None,
+                    topic_prefix: Some("shellypro4pm-34987a47a1dc".into()),
+                    rpc_ntf: true,
+                    status_ntf: false,
+                    use_client_cert: false,
+                    enable_control: true,
+                }
+            );
+        } else {
+            panic!("Wrong component: {entry:?}");
+        }
+    }
+
     #[test]
     fn test_eth() {
         let entry = serde_json::from_value::<ComponentEntry>(
@@ -348,7 +400,121 @@ mod test {
     }
 
     #[test]
-    fn test_2pm() {
+    fn test_switch() {
+        let entry = serde_json::from_value::<ComponentEntry>(json!(                    {
+            "key": "switch:1",
+            "status": {
+                "id": 1,
+                "source": "WS_in",
+                "output": false,
+                "apower": 0,
+                "voltage": 231.2,
+                "freq": 50,
+                "current": 0,
+                "pf": 0,
+                "aenergy": {
+                    "total": 0,
+                    "by_minute": [
+                        0,
+                        0,
+                        0
+                    ],
+                    "minute_ts": 1719549120
+                },
+                "ret_aenergy": {
+                    "total": 0,
+                    "by_minute": [
+                        0,
+                        0,
+                        0
+                    ],
+                    "minute_ts": 1719549120
+                },
+                "temperature": {
+                    "tC": 31,
+                    "tF": 87.7
+                }
+            },
+            "config": {
+                "id": 1,
+                "name": null,
+                "in_mode": "follow",
+                "initial_state": "match_input",
+                "auto_on": false,
+                "auto_on_delay": 60,
+                "auto_off": false,
+                "auto_off_delay": 60,
+                "power_limit": 4480,
+                "voltage_limit": 280,
+                "undervoltage_limit": 0,
+                "autorecover_voltage_errors": false,
+                "current_limit": 16
+            }
+        }))
+        .expect("Cannot parse Switch Component");
+        if let ComponentEntry::Switch(switch::Component {
+            key,
+            status,
+            config,
+        }) = entry
+        {
+            assert_eq!(key, switch::Key { id: 1 });
+            assert_eq!(
+                status,
+                switch::Status {
+                    id: 1,
+                    source: switch::LastCommandSource::WsIn,
+                    output: false,
+                    timer_started_at: None,
+                    timer_duration: None,
+                    temperature: Some(switch::Temperature {
+                        temp_celsius: Some(31.0),
+                        temp_fahrenheit: Some(87.7),
+                    }),
+                    active_energy: Some(switch::ActiveEnergy {
+                        total: 0.0,
+                        by_minute: Some([0.0, 0.0, 0.0]),
+                        minute_ts: DateTime::from_timestamp_nanos(1719549120 * 1000 * 1000 * 1000),
+                    }),
+                    active_power: Some(0.0),
+                    voltage: Some(231.2),
+                    current: Some(0.0),
+                    power_factor: Some(0.0),
+                    errors: None,
+                    frequency: None,
+                    returned_active_energy: Some(switch::ActiveEnergy {
+                        total: 0.0,
+                        by_minute: Some([0.0, 0.0, 0.0]),
+                        minute_ts: DateTime::from_timestamp_nanos(1719549120 * 1000 * 1000 * 1000),
+                    }),
+                }
+            );
+            assert_eq!(
+                config,
+                switch::Configuration {
+                    id: 1,
+                    name: None,
+                    in_mode: Some(switch::LightMode::Follow),
+                    initial_state: switch::InitialState::MatchInput,
+                    auto_on: false,
+                    auto_on_delay: Duration::seconds(60),
+                    auto_off: false,
+                    auto_off_delay: Duration::seconds(60),
+                    autorecover_voltage_errors: Some(false),
+                    input_id: None,
+                    power_limit: Some(4480),
+                    voltage_limit: Some(280),
+                    undervoltage_limit: Some(0),
+                    current_limit: Some(16.0)
+                }
+            );
+        } else {
+            panic!("Wrong component: {entry:?}");
+        }
+    }
+
+    #[test]
+    fn test_dimmer_2pm() {
         let result = serde_json::from_value::<GetComponentsResponse>(serde_json::json!({
                 "components": [
                     {
@@ -560,5 +726,229 @@ mod test {
                 "total": 13
         }))
         .expect("Cannot parse 2pm components");
+    }
+    #[test]
+    fn test_4pm() {
+        let result = serde_json::from_value::<GetComponentsResponse>(serde_json::json!({
+
+                "components": [
+                    {
+                        "key": "ble",
+                        "status": {},
+                        "config": {
+                            "enable": true,
+                            "rpc": {
+                                "enable": true
+                            },
+                            "observer": {
+                                "enable": false
+                            }
+                        }
+                    },
+                    {
+                        "key": "cloud",
+                        "status": {
+                            "connected": false
+                        },
+                        "config": {
+                            "enable": false,
+                            "server": "iot.shelly.cloud:6012/jrpc"
+                        }
+                    },
+                    {
+                        "key": "eth",
+                        "status": {
+                            "ip": "10.192.5.8"
+                        },
+                        "config": {
+                            "enable": true,
+                            "ipv4mode": "dhcp",
+                            "ip": null,
+                            "netmask": null,
+                            "gw": null,
+                            "nameserver": null
+                        }
+                    },
+                    {
+                        "key": "input:0",
+                        "status": {
+                            "id": 0,
+                            "state": false
+                        },
+                        "config": {
+                            "id": 0,
+                            "name": null,
+                            "type": "switch",
+                            "enable": true,
+                            "invert": false
+                        }
+                    },
+                    {
+                        "key": "input:1",
+                        "status": {
+                            "id": 1,
+                            "state": false
+                        },
+                        "config": {
+                            "id": 1,
+                            "name": null,
+                            "type": "switch",
+                            "enable": true,
+                            "invert": false
+                        }
+                    },
+                    {
+                        "key": "input:2",
+                        "status": {
+                            "id": 2,
+                            "state": false
+                        },
+                        "config": {
+                            "id": 2,
+                            "name": null,
+                            "type": "switch",
+                            "enable": true,
+                            "invert": false
+                        }
+                    },
+                    {
+                        "key": "input:3",
+                        "status": {
+                            "id": 3,
+                            "state": false
+                        },
+                        "config": {
+                            "id": 3,
+                            "name": null,
+                            "type": "switch",
+                            "enable": true,
+                            "invert": false
+                        }
+                    },
+                    {
+                        "key": "mqtt",
+                        "status": {
+                            "connected": false
+                        },
+                        "config": {
+                            "enable": false,
+                            "server": null,
+                            "client_id": "shellypro4pm-34987a47a1dc",
+                            "user": null,
+                            "ssl_ca": null,
+                            "topic_prefix": "shellypro4pm-34987a47a1dc",
+                            "rpc_ntf": true,
+                            "status_ntf": false,
+                            "use_client_cert": false,
+                            "enable_rpc": true,
+                            "enable_control": true
+                        }
+                    },
+                    {
+                        "key": "switch:0",
+                        "status": {
+                            "id": 0,
+                            "source": "init",
+                            "output": false,
+                            "apower": 0,
+                            "voltage": 231.3,
+                            "freq": 50,
+                            "current": 0,
+                            "pf": 0,
+                            "aenergy": {
+                                "total": 0,
+                                "by_minute": [
+                                    0,
+                                    0,
+                                    0
+                                ],
+                                "minute_ts": 1719549120
+                            },
+                            "ret_aenergy": {
+                                "total": 0,
+                                "by_minute": [
+                                    0,
+                                    0,
+                                    0
+                                ],
+                                "minute_ts": 1719549120
+                            },
+                            "temperature": {
+                                "tC": 31,
+                                "tF": 87.7
+                            }
+                        },
+                        "config": {
+                            "id": 0,
+                            "name": null,
+                            "in_mode": "follow",
+                            "initial_state": "match_input",
+                            "auto_on": false,
+                            "auto_on_delay": 60,
+                            "auto_off": false,
+                            "auto_off_delay": 60,
+                            "power_limit": 4480,
+                            "voltage_limit": 280,
+                            "undervoltage_limit": 0,
+                            "autorecover_voltage_errors": false,
+                            "current_limit": 16
+                        }
+                    },
+                    {
+                        "key": "switch:1",
+                        "status": {
+                            "id": 1,
+                            "source": "WS_in",
+                            "output": false,
+                            "apower": 0,
+                            "voltage": 231.2,
+                            "freq": 50,
+                            "current": 0,
+                            "pf": 0,
+                            "aenergy": {
+                                "total": 0,
+                                "by_minute": [
+                                    0,
+                                    0,
+                                    0
+                                ],
+                                "minute_ts": 1719549120
+                            },
+                            "ret_aenergy": {
+                                "total": 0,
+                                "by_minute": [
+                                    0,
+                                    0,
+                                    0
+                                ],
+                                "minute_ts": 1719549120
+                            },
+                            "temperature": {
+                                "tC": 31,
+                                "tF": 87.7
+                            }
+                        },
+                        "config": {
+                            "id": 1,
+                            "name": null,
+                            "in_mode": "follow",
+                            "initial_state": "match_input",
+                            "auto_on": false,
+                            "auto_on_delay": 60,
+                            "auto_off": false,
+                            "auto_off_delay": 60,
+                            "power_limit": 4480,
+                            "voltage_limit": 280,
+                            "undervoltage_limit": 0,
+                            "autorecover_voltage_errors": false,
+                            "current_limit": 16
+                        }
+                    }
+                ],
+                "cfg_rev": 3,
+                "offset": 0,
+                "total": 16
+        }))
+        .expect("Cannot parse 4pm components");
     }
 }
