@@ -22,6 +22,7 @@ use crate::{
 
 mod ble;
 mod cloud;
+mod common;
 mod eth;
 mod input;
 mod light;

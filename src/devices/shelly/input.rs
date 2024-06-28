@@ -1,7 +1,9 @@
 use std::fmt::Formatter;
 
-use serde::{Deserialize, Deserializer};
-use serde::de::{Error, Visitor};
+use serde::{
+    de::{Error, Visitor},
+    Deserialize, Deserializer,
+};
 
 #[derive(Deserialize, Debug, Clone, PartialEq)]
 pub struct Component {

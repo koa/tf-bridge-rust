@@ -1,12 +1,15 @@
 use std::fmt::Formatter;
 
 use chrono::{DateTime, Duration, Utc};
-use serde::{Deserialize, Deserializer};
-use serde::de::{Error, Visitor};
-use serde_with::DurationSeconds;
-use serde_with::formats::Flexible;
-use serde_with::serde_as;
-use serde_with::TimestampSeconds;
+use serde::{
+    de::{Error, Visitor},
+    Deserialize, Deserializer,
+};
+use serde_with::{DurationSeconds, formats::Flexible, serde_as, TimestampSeconds};
+
+use crate::devices::shelly::common::{
+    ActiveEnergy, InitialState, InputMode, LastCommandSource, StatusError, Temperature,
+};
 
 #[derive(Deserialize, Debug, Clone, PartialEq)]
 pub struct Component {
@@ -43,7 +46,7 @@ pub struct Status {
 pub struct Configuration {
     pub id: u16,
     pub name: Option<Box<str>>,
-    pub in_mode: Option<LightMode>,
+    pub in_mode: Option<InputMode>,
     pub initial_state: InitialState,
     pub auto_on: bool,
     #[serde_as(as = "DurationSeconds<String, Flexible>")]
@@ -59,109 +62,7 @@ pub struct Configuration {
     pub current_limit: Option<f32>,
 }
 #[derive(Deserialize, Debug, Clone, PartialEq)]
-pub enum LastCommandSource {
-    #[serde(rename = "init")]
-    Init,
-    #[serde(rename = "WS_in")]
-    WsIn,
-    #[serde(rename = "http")]
-    Http,
-}
-#[derive(Deserialize, Debug, Clone, PartialEq)]
 pub struct StatusTransition {}
-
-#[derive(Deserialize, Debug, Clone, PartialEq)]
-pub struct Temperature {
-    #[serde(rename = "tC")]
-    pub temp_celsius: Option<f32>,
-    #[serde(rename = "tF")]
-    pub temp_fahrenheit: Option<f32>,
-}
-#[serde_as]
-#[derive(Deserialize, Debug, Clone, PartialEq)]
-pub struct ActiveEnergy {
-    pub total: f64,
-    pub by_minute: Option<[f64; 3]>,
-    #[serde_as(as = "TimestampSeconds<String, Flexible>")]
-    pub minute_ts: DateTime<Utc>,
-}
-#[derive(Deserialize, Debug, Clone, PartialEq)]
-pub enum StatusError {
-    #[serde(rename = "overtemp")]
-    Overtemp,
-    #[serde(rename = "overpower")]
-    Overpower,
-    #[serde(rename = "overvoltage")]
-    Overvoltage,
-    #[serde(rename = "undervoltage")]
-    Undervoltage,
-    #[serde(rename = "overcurrent")]
-    Overcurrent,
-    #[serde(rename = "unsupported_load")]
-    UnsupportedLoad,
-    #[serde(rename = "cal_abort:interrupted")]
-    CalibrationAbortInterrupted,
-    #[serde(rename = "cal_abort:power_read")]
-    CalibrationAbortPowerRead,
-    #[serde(rename = "cal_abort:no_load")]
-    CalibrationAbortNoLoad,
-    #[serde(rename = "cal_abort:non_dimmable")]
-    CalibrationAbortNonDimmable,
-    #[serde(rename = "cal_abort:overpower")]
-    CalibrationAbortOverpower,
-    #[serde(rename = "cal_abort:unsupported_load")]
-    CalibrationAbortUnsupportedLoad,
-}
-#[derive(Deserialize, Debug, Clone, PartialEq)]
-pub enum StatusFlags {
-    #[serde(rename = "uncalibrated")]
-    Uncalibrated,
-}
-#[derive(Deserialize, Debug, Clone, PartialEq)]
-pub enum LightMode {
-    #[serde(rename = "follow")]
-    Follow,
-    #[serde(rename = "flip")]
-    Flip,
-    #[serde(rename = "activate")]
-    Activate,
-    #[serde(rename = "detached")]
-    Detached,
-    #[serde(rename = "dim")]
-    Dim,
-    #[serde(rename = "dual_dim")]
-    DualDim,
-    #[serde(rename = "momentary")]
-    Momentary,
-    #[serde(rename = "cycle")]
-    Cycle,
-}
-#[derive(Deserialize, Debug, Clone, PartialEq)]
-#[serde(rename = "snake_case")]
-pub enum InitialState {
-    #[serde(rename = "on")]
-    On,
-    #[serde(rename = "off")]
-    Off,
-    #[serde(rename = "restore_last")]
-    RestoreLast,
-    #[serde(rename = "match_input")]
-    MatchInput,
-}
-#[derive(Deserialize, Debug, Clone, PartialEq)]
-pub struct NightMode {
-    pub enable: bool,
-    pub brightness: u8,
-    pub active_between: Box<[Box<str>]>,
-}
-#[derive(Deserialize, Debug, Clone, PartialEq)]
-pub struct ButtonPresets {
-    pub button_doublepush: Option<ButtonDoublePush>,
-}
-#[derive(Deserialize, Debug, Clone, PartialEq)]
-pub struct ButtonDoublePush {
-    pub brightness: u8,
-}
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Key {

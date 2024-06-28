@@ -75,15 +75,16 @@ mod test {
     use serde_json::json;
 
     use crate::devices::shelly::{
-        ble, cloud, eth, input, light, mqtt,
+        ble, cloud, common, eth, input, light, mqtt,
         shelly::{ComponentEntry, GetComponentsResponse},
         switch,
     };
-    use crate::devices::shelly::light::{
-        ActiveEnergy, ButtonDoublePush, ButtonPresets, InitialState, LightMode, NightMode,
-        StatusFlags, Temperature,
+    use crate::devices::shelly::common::{
+        ButtonDoublePush, ButtonPresets, InitialState, InputMode, Temperature,
     };
-    use crate::shelly::light::LastCommandSource;
+    use crate::devices::shelly::light::{NightMode, StatusFlags};
+    use crate::shelly::common::ActiveEnergy;
+    use crate::shelly::common::LastCommandSource;
 
     #[test]
     fn test_input() {
@@ -370,7 +371,7 @@ mod test {
                 light::Configuration {
                     id: 0,
                     name: None,
-                    in_mode: Some(LightMode::Dim),
+                    in_mode: Some(InputMode::Dim),
                     initial_state: InitialState::RestoreLast,
                     auto_on: false,
                     auto_on_delay: Duration::seconds(60),
@@ -463,15 +464,15 @@ mod test {
                 status,
                 switch::Status {
                     id: 1,
-                    source: switch::LastCommandSource::WsIn,
+                    source: common::LastCommandSource::WsIn,
                     output: false,
                     timer_started_at: None,
                     timer_duration: None,
-                    temperature: Some(switch::Temperature {
+                    temperature: Some(common::Temperature {
                         temp_celsius: Some(31.0),
                         temp_fahrenheit: Some(87.7),
                     }),
-                    active_energy: Some(switch::ActiveEnergy {
+                    active_energy: Some(ActiveEnergy {
                         total: 0.0,
                         by_minute: Some([0.0, 0.0, 0.0]),
                         minute_ts: DateTime::from_timestamp_nanos(1719549120 * 1000 * 1000 * 1000),
@@ -482,7 +483,7 @@ mod test {
                     power_factor: Some(0.0),
                     errors: None,
                     frequency: None,
-                    returned_active_energy: Some(switch::ActiveEnergy {
+                    returned_active_energy: Some(ActiveEnergy {
                         total: 0.0,
                         by_minute: Some([0.0, 0.0, 0.0]),
                         minute_ts: DateTime::from_timestamp_nanos(1719549120 * 1000 * 1000 * 1000),
@@ -494,8 +495,8 @@ mod test {
                 switch::Configuration {
                     id: 1,
                     name: None,
-                    in_mode: Some(switch::LightMode::Follow),
-                    initial_state: switch::InitialState::MatchInput,
+                    in_mode: Some(common::InputMode::Follow),
+                    initial_state: common::InitialState::MatchInput,
                     auto_on: false,
                     auto_on_delay: Duration::seconds(60),
                     auto_off: false,
