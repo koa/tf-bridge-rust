@@ -141,6 +141,7 @@ async fn run_enumeration_listener(
     let (tx, rx) = WsTransportClientBuilder::default().build(uri).await?;
     let client: Client = ClientBuilder::default().build_with_tokio(tx, rx);
     let result = client.get_deviceinfo(false).await?;
+    info!("Device Info: {result:#?}");
     let mut offset = 0;
     let mut component_entries = Vec::new();
     loop {
@@ -153,7 +154,7 @@ async fn run_enumeration_listener(
         }
         offset += response.components().len() as u16;
     }
-    info!("Found Components: {component_entries:#?}");
+    //info!("Found Components: {component_entries:#?}");
     Ok(())
 }
 

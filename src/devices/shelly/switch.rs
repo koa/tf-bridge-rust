@@ -1,5 +1,3 @@
-use std::fmt::Formatter;
-
 use chrono::{DateTime, Duration, Utc};
 use serde::{
     de::{Error, Visitor},
@@ -7,9 +5,14 @@ use serde::{
 };
 use serde_with::{DurationSeconds, formats::Flexible, serde_as, TimestampSeconds};
 
-use crate::devices::shelly::common::{
-    ActiveEnergy, InitialState, InputMode, LastCommandSource, StatusError, Temperature,
+use crate::{
+    devices::shelly::common::{
+        ActiveEnergy, InitialState, InputMode, LastCommandSource, StatusError, Temperature,
+    },
+    serde::{PrefixedKey, SerdeStringKey},
 };
+
+pub type Key = SerdeStringKey<SwitchKey>;
 
 #[derive(Deserialize, Debug, Clone, PartialEq)]
 pub struct Component {
@@ -64,42 +67,24 @@ pub struct Configuration {
 #[derive(Deserialize, Debug, Clone, PartialEq)]
 pub struct StatusTransition {}
 
-#[derive(Debug, Clone, PartialEq)]
-pub struct Key {
+#[derive(Debug, Clone, PartialEq, Copy)]
+pub struct SwitchKey {
     pub id: u16,
 }
 
-impl<'de> Deserialize<'de> for Key {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        deserializer.deserialize_str(KeyVisitor)
+impl From<u16> for SwitchKey {
+    fn from(value: u16) -> Self {
+        SwitchKey { id: value }
+    }
+}
+impl From<SwitchKey> for u16 {
+    fn from(value: SwitchKey) -> Self {
+        value.id
     }
 }
 
-struct KeyVisitor;
-
-const KEY_PREFIX: &str = "switch:";
-
-impl<'de> Visitor<'de> for KeyVisitor {
-    type Value = Key;
-
-    fn expecting(&self, formatter: &mut Formatter) -> std::fmt::Result {
-        formatter.write_str("a light key beginning with 'light:' followed by a u16")
-    }
-
-    fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
-    where
-        E: Error,
-    {
-        if v.starts_with(KEY_PREFIX) {
-            let id: u16 = v[KEY_PREFIX.len()..]
-                .parse()
-                .map_err(|e| Error::custom(e))?;
-            Ok(Key { id })
-        } else {
-            Err(Error::custom(format!("wrong prefix: {v}")))
-        }
+impl PrefixedKey for SwitchKey {
+    fn prefix() -> &'static str {
+        "switch:"
     }
 }

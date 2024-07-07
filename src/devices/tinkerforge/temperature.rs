@@ -2,6 +2,7 @@ use std::time::Duration;
 
 use log::error;
 use thiserror::Error;
+use tinkerforge_async::base58::Uid;
 use tinkerforge_async::{
     base58::Base58Error,
     error::TinkerforgeError,
@@ -9,12 +10,11 @@ use tinkerforge_async::{
         SetTemperatureCallbackConfigurationRequest, TemperatureV2Bricklet, ThresholdOption,
     },
 };
-use tinkerforge_async::base58::Uid;
 use tokio::{
     sync::mpsc::{self, Sender},
     task::JoinHandle,
 };
-use tokio_stream::{StreamExt, wrappers::ReceiverStream};
+use tokio_stream::{wrappers::ReceiverStream, StreamExt};
 
 use crate::{
     data::{

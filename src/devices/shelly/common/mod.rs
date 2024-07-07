@@ -2,6 +2,9 @@ use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use serde_with::{formats::Flexible, serde_as, TimestampSeconds};
 
+use crate::devices::shelly::{light, switch};
+use crate::devices::shelly::shelly::DeviceId;
+
 #[derive(Deserialize, Debug, Clone, PartialEq)]
 pub enum LastCommandSource {
     #[serde(rename = "init")]
@@ -10,6 +13,8 @@ pub enum LastCommandSource {
     WsIn,
     #[serde(rename = "http")]
     Http,
+    #[serde(rename = "UI")]
+    UI,
 }
 
 #[serde_as]
@@ -97,5 +102,16 @@ pub struct ButtonPresets {
 
 #[derive(Deserialize, Debug, Clone, PartialEq)]
 pub struct ButtonDoublePush {
-    pub brightness: u8,
+    pub brightness: f32,
+}
+#[derive(Deserialize, Debug, Clone, PartialEq, Copy)]
+pub enum ActorKey {
+    Light(light::Key),
+    Switch(switch::Key),
+}
+
+#[derive(Deserialize, Debug, Clone, PartialEq, Copy)]
+pub struct ActorId {
+    device: DeviceId,
+    actor: ActorKey,
 }

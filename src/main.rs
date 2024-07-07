@@ -1,6 +1,6 @@
 use std::{error::Error, fmt::Debug, fs::File, future::Future, time::Duration};
 
-use actix_web::{get, App, HttpServer};
+use actix_web::{App, get, HttpServer};
 use actix_web_prometheus::PrometheusMetricsBuilder;
 use env_logger::{Env, TimestampPrecision};
 use log::{error, info};
@@ -10,7 +10,7 @@ use tokio::{
     sync::mpsc::{self, Sender},
     time::sleep,
 };
-use tokio_stream::{once, wrappers::ReceiverStream, StreamExt};
+use tokio_stream::{once, StreamExt, wrappers::ReceiverStream};
 
 use crate::{
     controller::{
@@ -21,7 +21,7 @@ use crate::{
     data::{
         google_data::read_sheet_data,
         registry::EventRegistry,
-        settings::{Shelly, Tinkerforge, CONFIG},
+        settings::{CONFIG, Shelly, Tinkerforge},
         state::{State, StateUpdateMessage},
         wiring::{Controllers, MotionDetector, Wiring},
     },
@@ -35,6 +35,7 @@ mod data;
 mod devices;
 mod icons;
 mod metrics;
+mod serde;
 mod snapshot;
 mod terminator;
 mod util;

@@ -34,6 +34,7 @@ tokio-util = "0.7"
 futures = "0.3"
 google-sheets4 = "5.0"
 ron = "0.8"
+macaddr = "1.0.1"
 
 [build-dependencies]
 image = "0.25"

@@ -1,9 +1,9 @@
-use std::fmt::Formatter;
-
 use serde::{
     de::{Error, Visitor},
     Deserialize, Deserializer,
 };
+
+use crate::serde::{PrefixedKey, SerdeStringKey};
 
 #[derive(Deserialize, Debug, Clone, PartialEq)]
 pub struct Component {
@@ -24,39 +24,27 @@ pub struct Configuration {
     pub name: Option<Box<str>>,
 }
 #[derive(Debug, Clone, PartialEq)]
-pub struct Key {
+pub struct InputKey {
     pub id: u16,
 }
 
-impl<'de> Deserialize<'de> for Key {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        deserializer.deserialize_str(KeyVisitor)
+impl From<u16> for InputKey {
+    fn from(id: u16) -> Self {
+        InputKey { id }
+    }
+}
+impl From<InputKey> for u16 {
+    fn from(value: InputKey) -> Self {
+        value.id
     }
 }
 
-struct KeyVisitor;
+impl PrefixedKey for InputKey {
+    fn prefix() -> &'static str {
+        KEY_PREFIX
+    }
+}
+
+pub type Key = SerdeStringKey<InputKey>;
 
 const KEY_PREFIX: &str = "input:";
-
-impl<'de> Visitor<'de> for KeyVisitor {
-    type Value = Key;
-
-    fn expecting(&self, formatter: &mut Formatter) -> std::fmt::Result {
-        formatter.write_str("a input key beginning with 'input:' followed by a u16")
-    }
-
-    fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
-    where
-        E: Error,
-    {
-        if let Some(id_str) = v.strip_prefix(KEY_PREFIX) {
-            let id: u16 = id_str.parse().map_err(|e| Error::custom(e))?;
-            Ok(Key { id })
-        } else {
-            Err(Error::custom(format!("wrong prefix: {v}")))
-        }
-    }
-}
