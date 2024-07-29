@@ -10,7 +10,7 @@ chrono = "0.4.34"
 tinkerforge-async = { version = "2.0.8-SN2", features = ["prometheus", "serde"], registry = "kellnr-berg-turbenthal" }
 jsonrpsee = { version = "0.23.1", features = ["ws-client", "macros", "jsonrpsee-client-transport"] }
 url = "2.5.2"
-tokio = { version = "1.36", features = ["fs", "macros"] }
+tokio = { version = "1.39", features = ["fs", "macros"] }
 tokio-stream = { version = "0.1", features = ["time", "sync"] }
 sub-array = "0.1"
 bitmap-font = "0.3"
