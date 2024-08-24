@@ -1,7 +1,4 @@
-use serde::{
-    de::{Error, Visitor},
-    Deserialize, Deserializer,
-};
+use serde::Deserialize;
 
 use crate::serde::{PrefixedKey, SerdeStringKey};
 

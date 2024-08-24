@@ -1,9 +1,6 @@
 use chrono::{DateTime, Duration, Utc};
-use serde::{
-    de::{Error, Visitor},
-    Deserialize, Deserializer,
-};
-use serde_with::{DurationSeconds, formats::Flexible, serde_as, TimestampSeconds};
+use serde::Deserialize;
+use serde_with::{formats::Flexible, serde_as, DurationSeconds, TimestampSeconds};
 
 use crate::{
     devices::shelly::common::{

@@ -2,8 +2,7 @@ use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use serde_with::{formats::Flexible, serde_as, TimestampSeconds};
 
-use crate::devices::shelly::{light, switch};
-use crate::devices::shelly::shelly::DeviceId;
+use crate::devices::shelly::{light, shelly::DeviceId, switch};
 
 #[derive(Deserialize, Debug, Clone, PartialEq)]
 pub enum LastCommandSource {
@@ -15,6 +14,8 @@ pub enum LastCommandSource {
     Http,
     #[serde(rename = "UI")]
     UI,
+    #[serde(rename = "")]
+    None,
 }
 
 #[serde_as]

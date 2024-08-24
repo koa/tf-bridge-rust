@@ -3,15 +3,14 @@ use std::{
     str::FromStr,
 };
 
+use crate::devices::shelly::{ble, cloud, eth, input, light, mqtt, switch};
 use jsonrpsee::proc_macros::rpc;
 use macaddr::MacAddr6;
 use serde::{
     de::{Error, Visitor},
     Deserialize, Deserializer,
 };
-use serde_json::Value;
-
-use crate::devices::shelly::{ble, cloud, eth, input, light, mqtt, switch};
+use serde_json::{value::RawValue, Value};
 
 #[rpc(client)]
 pub trait Shelly {
@@ -23,6 +22,12 @@ pub trait Shelly {
         offset: u16,
         dynamic_only: bool,
     ) -> Result<GetComponentsResponse, ErrorObjectOwned>;
+    #[method(name = "shelly.getcomponents")]
+    async fn get_components_string(
+        &self,
+        offset: u16,
+        dynamic_only: bool,
+    ) -> Result<Box<RawValue>, ErrorObjectOwned>;
 }
 
 #[derive(Deserialize, Debug)]
@@ -1042,221 +1047,7 @@ mod test {
     #[test]
     fn test_components() {
         let components_json = json!({
-            "components": [
-                {
-                    "key": "ble",
-                    "status": {},
-                    "config": {
-                        "enable": true,
-                        "rpc": {
-                            "enable": true
-                        },
-                        "observer": {
-                            "enable": false
-                        }
-                    }
-                },
-                {
-                    "key": "cloud",
-                    "status": {
-                        "connected": false
-                    },
-                    "config": {
-                        "enable": false,
-                        "server": "iot.shelly.cloud:6012/jrpc"
-                    }
-                },
-                {
-                    "key": "eth",
-                    "status": {
-                        "ip": "10.192.5.8"
-                    },
-                    "config": {
-                        "enable": true,
-                        "ipv4mode": "dhcp",
-                        "ip": null,
-                        "netmask": null,
-                        "gw": null,
-                        "nameserver": null
-                    }
-                },
-                {
-                    "key": "input:0",
-                    "status": {
-                        "id": 0,
-                        "state": false
-                    },
-                    "config": {
-                        "id": 0,
-                        "name": null,
-                        "type": "switch",
-                        "enable": true,
-                        "invert": false
-                    }
-                },
-                {
-                    "key": "input:1",
-                    "status": {
-                        "id": 1,
-                        "state": false
-                    },
-                    "config": {
-                        "id": 1,
-                        "name": null,
-                        "type": "switch",
-                        "enable": true,
-                        "invert": false
-                    }
-                },
-                {
-                    "key": "input:2",
-                    "status": {
-                        "id": 2,
-                        "state": false
-                    },
-                    "config": {
-                        "id": 2,
-                        "name": null,
-                        "type": "switch",
-                        "enable": true,
-                        "invert": false
-                    }
-                },
-                {
-                    "key": "input:3",
-                    "status": {
-                        "id": 3,
-                        "state": false
-                    },
-                    "config": {
-                        "id": 3,
-                        "name": null,
-                        "type": "switch",
-                        "enable": true,
-                        "invert": false
-                    }
-                },
-                {
-                    "key": "mqtt",
-                    "status": {
-                        "connected": false
-                    },
-                    "config": {
-                        "enable": false,
-                        "server": null,
-                        "client_id": "shellypro4pm-34987a47a1dc",
-                        "user": null,
-                        "ssl_ca": null,
-                        "topic_prefix": "shellypro4pm-34987a47a1dc",
-                        "rpc_ntf": true,
-                        "status_ntf": false,
-                        "use_client_cert": false,
-                        "enable_rpc": true,
-                        "enable_control": true
-                    }
-                },
-                {
-                    "key": "switch:0",
-                    "status": {
-                        "id": 0,
-                        "source": "UI",
-                        "output": false,
-                        "apower": 0,
-                        "voltage": 233.1,
-                        "freq": 50,
-                        "current": 0,
-                        "pf": 0,
-                        "aenergy": {
-                            "total": 0,
-                            "by_minute": [
-                                0,
-                                0,
-                                0
-                            ],
-                            "minute_ts": 1720259700
-                        },
-                        "ret_aenergy": {
-                            "total": 0,
-                            "by_minute": [
-                                0,
-                                0,
-                                0
-                            ],
-                            "minute_ts": 1720259700
-                        },
-                        "temperature": {
-                            "tC": 39.8,
-                            "tF": 103.6
-                        }
-                    },
-                    "config": {
-                        "id": 0,
-                        "name": null,
-                        "in_mode": "follow",
-                        "initial_state": "match_input",
-                        "auto_on": false,
-                        "auto_on_delay": 60,
-                        "auto_off": false,
-                        "auto_off_delay": 60,
-                        "power_limit": 4480,
-                        "voltage_limit": 280,
-                        "undervoltage_limit": 0,
-                        "autorecover_voltage_errors": false,
-                        "current_limit": 16
-                    }
-                },
-                {
-                    "key": "switch:1",
-                    "status": {
-                        "id": 1,
-                        "source": "WS_in",
-                        "output": false,
-                        "apower": 0,
-                        "voltage": 233.1,
-                        "freq": 50,
-                        "current": 0,
-                        "pf": 0,
-                        "aenergy": {
-                            "total": 0,
-                            "by_minute": [
-                                0,
-                                0,
-                                0
-                            ],
-                            "minute_ts": 1720259700
-                        },
-                        "ret_aenergy": {
-                            "total": 0,
-                            "by_minute": [
-                                0,
-                                0,
-                                0
-                            ],
-                            "minute_ts": 1720259700
-                        },
-                        "temperature": {
-                            "tC": 39.8,
-                            "tF": 103.6
-                        }
-                    },
-                    "config": {
-                        "id": 1,
-                        "name": null,
-                        "in_mode": "follow",
-                        "initial_state": "match_input",
-                        "auto_on": false,
-                        "auto_on_delay": 60,
-                        "auto_off": false,
-                        "auto_off_delay": 60,
-                        "power_limit": 4480,
-                        "voltage_limit": 280,
-                        "undervoltage_limit": 0,
-                        "autorecover_voltage_errors": false,
-                        "current_limit": 16
-                    }
-                }
-            ]
-        });
+            "components": [{"config":{"enable":true,"observer":{"enable":false},"rpc":{"enable":true}},"key":"ble","status":{}},{"config":{"enable":false,"server":"iot.shelly.cloud:6012/jrpc"},"key":"cloud","status":{"connected":false}},{"config":{"enable":true,"gw":null,"ip":null,"ipv4mode":"dhcp","nameserver":null,"netmask":null},"key":"eth","status":{"ip":"10.192.5.6"}},{"config":{"enable":true,"id":0,"invert":false,"name":null,"type":"button"},"key":"input:0","status":{"id":0,"state":null}},{"config":{"enable":true,"id":1,"invert":false,"name":null,"type":"button"},"key":"input:1","status":{"id":1,"state":null}},{"config":{"enable":true,"id":2,"invert":false,"name":null,"type":"button"},"key":"input:2","status":{"id":2,"state":null}},{"config":{"enable":true,"id":3,"invert":false,"name":null,"type":"button"},"key":"input:3","status":{"id":3,"state":null}},{"config":{"auto_off":false,"auto_off_delay":60.0,"auto_on":false,"auto_on_delay":60.0,"button_fade_rate":3,"button_presets":{"button_doublepush":{"brightness":100.0}},"current_limit":1.22,"id":0,"in_mode":"dim","initial_state":"restore_last","min_brightness_on_toggle":3.0,"name":null,"night_mode":{"active_between":[],"brightness":50.0,"enable":false},"power_limit":230,"transition_duration":3.0,"undervoltage_limit":200,"voltage_limit":280},"key":"light:0","status":{"aenergy":{"by_minute":[0.0,0.0,0.0],"minute_ts":1724401200,"total":0.0},"apower":0.0,"brightness":1.0,"current":0.0,"flags":["uncalibrated"],"id":0,"output":false,"source":"","temperature":{"tC":31.6,"tF":88.9},"voltage":233.8}},{"config":{"auto_off":false,"auto_off_delay":60.0,"auto_on":false,"auto_on_delay":60.0,"button_fade_rate":3,"button_presets":{"button_doublepush":{"brightness":100.0}},"current_limit":1.22,"id":1,"in_mode":"dim","initial_state":"restore_last","min_brightness_on_toggle":3.0,"name":null,"night_mode":{"active_between":[],"brightness":50.0,"enable":false},"power_limit":230,"transition_duration":3.0,"undervoltage_limit":200,"voltage_limit":280},"key":"light:1","status":{"aenergy":{"by_minute":[0.0,0.0,0.0],"minute_ts":1724401200,"total":0.0},"apower":0.0,"brightness":1.0,"current":0.0,"flags":["uncalibrated"],"id":1,"output":false,"source":"","temperature":{"tC":35.5,"tF":95.9},"voltage":233.8}}]        });
         for component in components_json
             .get("components")
             .and_then(|v| v.as_array())

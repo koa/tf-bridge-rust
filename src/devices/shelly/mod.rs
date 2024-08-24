@@ -1,14 +1,20 @@
-use std::{net::IpAddr, sync::Arc, time::Duration};
-
 use jsonrpsee::{
     client_transport::{
-        ws::{Url, WsTransportClientBuilder},
         ws::WsHandshakeError,
+        ws::{Url, WsTransportClientBuilder},
     },
-    core::client::{Client, ClientBuilder},
+    core::{
+        client::{self, Client, ClientBuilder, ClientT, Error},
+        ClientError,
+    },
 };
-use jsonrpsee::core::{client, ClientError};
 use log::{error, info};
+use std::{
+    fmt::{Display, Formatter},
+    net::IpAddr,
+    sync::Arc,
+    time::Duration,
+};
 use thiserror::Error;
 use tokio::{sync::mpsc, task, time::sleep};
 
@@ -16,7 +22,7 @@ use crate::{
     data::{
         registry::EventRegistry, settings::Shelly, state::StateUpdateMessage, wiring::ShellyDevices,
     },
-    devices::shelly::shelly::ShellyClient,
+    devices::shelly::shelly::{GetComponentsResponse, ShellyClient},
     terminator::{TestamentReceiver, TestamentSender},
 };
 
@@ -99,9 +105,12 @@ fn start_enumeration_listener(
                     info!("{socket_str}: Finished");
                     break;
                 }
-                Err(e) => {
-                    error!("{socket_str}: Error: {e}");
-                    if let ShellyError::ClientError(client::Error::ParseError(e)) = e {
+                Err(ShellyEndpointError {
+                    base_error,
+                    endpoint,
+                }) => {
+                    error!("{socket_str}: Error: {base_error}");
+                    if let ShellyError::ClientError(client::Error::ParseError(e)) = base_error {
                         error!(
                             "{socket_str}: Parse Error at {}:{}: {e}",
                             e.line(),
@@ -135,27 +144,60 @@ async fn run_enumeration_listener(
     shelly_devices: Arc<ShellyDevices>,
     termination: TestamentReceiver,
     status_updater: mpsc::Sender<StateUpdateMessage>,
-) -> Result<(), ShellyError> {
-    let uri = Url::parse(&format!("ws://{}/rpc", addr))?;
+) -> Result<(), ShellyEndpointError> {
+    let uri = Url::parse(&format!("ws://{}/rpc", addr)).map_err(enrich_error(addr))?;
 
-    let (tx, rx) = WsTransportClientBuilder::default().build(uri).await?;
+    let (tx, rx) = WsTransportClientBuilder::default()
+        .build(uri)
+        .await
+        .map_err(enrich_error(addr))?;
     let client: Client = ClientBuilder::default().build_with_tokio(tx, rx);
-    let result = client.get_deviceinfo(false).await?;
-    info!("Device Info: {result:#?}");
+    let result = client
+        .get_deviceinfo(false)
+        .await
+        .map_err(enrich_error(addr))?;
+    info!("Device Info at {addr}: {result:#?}");
     let mut offset = 0;
     let mut component_entries = Vec::new();
     loop {
-        let response = client.get_components(offset, false).await?;
-        for entry in response.components().iter().cloned() {
-            component_entries.push(entry);
+        let result1 = client.get_components(offset, false).await;
+        match result1 {
+            Ok(response) => {
+                for entry in response.components().iter().cloned() {
+                    component_entries.push(entry);
+                }
+                if response.total() as usize >= component_entries.len() {
+                    break;
+                }
+                offset += response.components().len() as u16;
+            }
+            Err(Error::ParseError(e)) => {
+                let string = client
+                    .get_components_string(offset, false)
+                    .await
+                    .map_err(enrich_error(addr))?;
+                error!("Cannot parse response from {string} from {addr}: {e}");
+                return Ok(());
+            }
+            Err(e) => {
+                return Err(ShellyEndpointError {
+                    base_error: e.into(),
+                    endpoint: addr,
+                });
+            }
         }
-        if response.total() as usize >= component_entries.len() {
-            break;
-        }
-        offset += response.components().len() as u16;
     }
     //info!("Found Components: {component_entries:#?}");
     Ok(())
+}
+
+fn enrich_error<E: Into<ShellyError> + Sized>(
+    addr: IpAddr,
+) -> impl Fn(E) -> ShellyEndpointError + Sized {
+    move |error| ShellyEndpointError {
+        base_error: error.into(),
+        endpoint: addr,
+    }
 }
 
 #[derive(Error, Debug)]
@@ -168,4 +210,16 @@ enum ShellyError {
     WsHandshakeError(#[from] WsHandshakeError),
     #[error("JSON RPC Error: {0}")]
     ClientError(#[from] ClientError),
+}
+
+#[derive(Error, Debug)]
+struct ShellyEndpointError {
+    base_error: ShellyError,
+    endpoint: IpAddr,
+}
+
+impl Display for ShellyEndpointError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Error: {} at shelly {}", self.base_error, self.endpoint)
+    }
 }

@@ -262,7 +262,7 @@ impl GoogleSheetWireBuilder {
                             metadata,
                             connection_failed_counter,
                             error_counters,
-                            session,
+                            session: _,
                         },
                     )| {
                         if state != &ConnectionState::Connected {
@@ -816,7 +816,7 @@ impl GoogleSheetWireBuilder {
                     , &context.timestamp_format);
             }
             if let Some(uid) = temp_sensor {
-                update_state_new(|s| self.updates.push(s), context.state, &temperature_state, uid,&context.timestamp_format )
+                update_state_new(|s| self.updates.push(s), context.state, &temperature_state, uid, &context.timestamp_format)
             }
         }
         let controller_rows = fill_device_idx(|s| self.updates.push(s), device_ids_of_rooms);
