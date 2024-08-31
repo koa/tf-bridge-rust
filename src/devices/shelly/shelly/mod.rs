@@ -1,7 +1,9 @@
 use std::{fmt::Debug, str::FromStr};
 
 use crate::devices::shelly::common::DeviceId;
-use crate::devices::shelly::{ble, cloud, eth, input, light, mqtt, switch, sys, ui, wifi, ws};
+use crate::devices::shelly::{
+    ble, bthome, cloud, eth, input, knx, light, mqtt, switch, sys, ui, wifi, ws,
+};
 use jsonrpsee::proc_macros::rpc;
 use serde::{
     de::{Error, Visitor},
@@ -25,6 +27,8 @@ pub trait Shelly {
         offset: u16,
         dynamic_only: bool,
     ) -> Result<Box<RawValue>, ErrorObjectOwned>;
+    #[method(name = "shelly.reboot",param_kind=map)]
+    async fn reboot(&self, delay_ms: Option<u16>) -> Result<(), ErrorObjectOwned>;
 }
 
 #[derive(Deserialize, Debug)]
@@ -81,6 +85,8 @@ pub enum ComponentEntry {
     Ws(ws::Component),
     Wifi(wifi::Component),
     Ui(ui::Component),
+    Bthome(bthome::Component),
+    Knx(knx::Component),
 }
 
 #[derive(Clone, PartialEq, Copy)]

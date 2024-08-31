@@ -925,7 +925,7 @@ fn test_dimmer_2pm_1() {
 
 #[test]
 fn test_components() {
-    let components_json = json!({"cfg_rev":5,"components":[{"config":{"client_id":"shellyprodm2pm-08f9e0e720c8","enable":false,"enable_control":true,"enable_rpc":true,"rpc_ntf":true,"server":null,"ssl_ca":null,"status_ntf":false,"topic_prefix":"shellyprodm2pm-08f9e0e720c8","use_client_cert":false,"user":null},"key":"mqtt","status":{"connected":false}},{"config":{"cfg_rev":5,"debug":{"file_level":null,"level":2,"mqtt":{"enable":false},"udp":{"addr":null},"websocket":{"enable":false}},"device":{"discoverable":true,"fw_id":"20240625-123141/1.3.3-gbdfd9b3","mac":"08F9E0E720C8","name":null},"location":{"lat":47.3682,"lon":8.5671,"tz":"Europe/Zurich"},"rpc_udp":{"dst_addr":null,"listen_port":null},"sntp":{"server":"time.google.com"},"ui_data":{}},"key":"sys","status":{"available_updates":{"stable":{"version":"1.4.2"}},"cfg_rev":5,"fs_free":192512,"fs_size":524288,"kvs_rev":0,"mac":"08F9E0E720C8","ram_free":120240,"ram_size":259828,"reset_reason":1,"restart_required":false,"schedule_rev":1,"time":"10:03","unixtime":1725091412,"uptime":700043,"webhook_rev":0}},{"config":{"ap":{"enable":false,"is_open":true,"range_extender":{"enable":false},"ssid":"ShellyProDM2PM-08F9E0E720C8"},"roam":{"interval":60,"rssi_thr":-80},"sta":{"enable":false,"gw":null,"ip":null,"ipv4mode":"dhcp","is_open":true,"nameserver":null,"netmask":null,"ssid":null},"sta1":{"enable":false,"gw":null,"ip":null,"ipv4mode":"dhcp","is_open":true,"nameserver":null,"netmask":null,"ssid":null}},"key":"wifi","status":{"rssi":0,"ssid":null,"sta_ip":null,"status":"disconnected"}},{"config":{"enable":false,"server":null,"ssl_ca":"ca.pem"},"key":"ws","status":{"connected":false}}],"offset":9,"total":13});
+    let components_json = json!( {"cfg_rev":7,"components":[{"config":{"client_id":"shellyprodm2pm-08f9e0e720c8","enable":false,"enable_control":true,"enable_rpc":true,"rpc_ntf":true,"server":null,"ssl_ca":null,"status_ntf":false,"topic_prefix":"shellyprodm2pm-08f9e0e720c8","use_client_cert":false,"user":null},"key":"mqtt","status":{"connected":false}},{"config":{"cfg_rev":7,"debug":{"file_level":null,"level":2,"mqtt":{"enable":false},"udp":{"addr":null},"websocket":{"enable":false}},"device":{"discoverable":true,"fw_id":"20240819-074552/1.4.2-gc2639da","mac":"08F9E0E720C8","name":null},"location":{"lat":47.3682,"lon":8.5671,"tz":"Europe/Zurich"},"rpc_udp":{"dst_addr":null,"listen_port":null},"sntp":{"server":"time.google.com"},"ui_data":{}},"key":"sys","status":{"available_updates":{},"cfg_rev":7,"fs_free":184320,"fs_size":524288,"kvs_rev":0,"mac":"08F9E0E720C8","ram_free":87208,"ram_size":265584,"reset_reason":3,"restart_required":false,"schedule_rev":1,"time":"16:25","unixtime":1725114307,"uptime":2881,"webhook_rev":0}},{"config":{"ap":{"enable":false,"is_open":true,"range_extender":{"enable":false},"ssid":"ShellyProDM2PM-08F9E0E720C8"},"roam":{"interval":60,"rssi_thr":-80},"sta":{"enable":true,"gw":null,"ip":null,"ipv4mode":"dhcp","is_open":true,"nameserver":null,"netmask":null,"ssid":"#CHFreeWiFi"},"sta1":{"enable":false,"gw":null,"ip":null,"ipv4mode":"dhcp","is_open":true,"nameserver":null,"netmask":null,"ssid":null}},"key":"wifi","status":{"rssi":-49,"ssid":"#CHFreeWiFi","sta_ip":"10.192.1.198","status":"got ip"}},{"config":{"enable":false,"server":null,"ssl_ca":"ca.pem"},"key":"ws","status":{"connected":false}}],"offset":11,"total":15} );
     for component in components_json
         .get("components")
         .and_then(|v| v.as_array())
@@ -944,55 +944,6 @@ fn test_components() {
 }
 #[test]
 fn test_parse_switch() {
-    serde_json::from_value::<switch::Component>(json!(                {
-        "key": "switch:0",
-        "status": {
-            "id": 0,
-            "source": "UI",
-            "output": false,
-            "apower": 0,
-            "voltage": 233.1,
-            "freq": 50,
-            "current": 0,
-            "pf": 0,
-            "aenergy": {
-                "total": 0,
-                "by_minute": [
-                    0,
-                    0,
-                    0
-                ],
-                "minute_ts": 1720259700
-            },
-            "ret_aenergy": {
-                "total": 0,
-                "by_minute": [
-                    0,
-                    0,
-                    0
-                ],
-                "minute_ts": 1720259700
-            },
-            "temperature": {
-                "tC": 39.8,
-                "tF": 103.6
-            }
-        },
-        "config": {
-            "id": 0,
-            "name": null,
-            "in_mode": "follow",
-            "initial_state": "match_input",
-            "auto_on": false,
-            "auto_on_delay": 60,
-            "auto_off": false,
-            "auto_off_delay": 60,
-            "power_limit": 4480,
-            "voltage_limit": 280,
-            "undervoltage_limit": 0,
-            "autorecover_voltage_errors": false,
-            "current_limit": 16
-        }
-    }))
+    serde_json::from_value::<switch::Component>(json!(                {"config":{"auto_off":false,"auto_off_delay":60.0,"auto_on":false,"auto_on_delay":60.0,"autorecover_voltage_errors":false,"current_limit":16.0,"id":0,"in_mode":"follow","initial_state":"match_input","name":null,"power_limit":4480,"undervoltage_limit":0,"voltage_limit":280},"key":"switch:0","status":{"aenergy":{"by_minute":[0.0,0.0,0.0],"minute_ts":1725093540,"total":0.0},"apower":0.0,"current":0.0,"freq":50.0,"id":0,"output":false,"pf":0.0,"ret_aenergy":{"by_minute":[0.0,0.0,0.0],"minute_ts":1725093540,"total":0.0},"source":"timer","temperature":{"tC":57.3,"tF":135.1},"voltage":232.7}}))
     .expect("Cannot parse switch");
 }

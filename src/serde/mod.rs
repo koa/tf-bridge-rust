@@ -9,7 +9,7 @@ use std::ops::Deref;
 use std::str::FromStr;
 use thiserror::Error;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Hash)]
 pub struct SerdeStringKey<K: PrefixedKey>(K);
 
 #[derive(Debug, Clone, Copy, Ord, PartialOrd, Eq, PartialEq, Hash)]

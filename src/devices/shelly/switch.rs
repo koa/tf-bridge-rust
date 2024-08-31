@@ -1,7 +1,9 @@
 use chrono::{DateTime, Duration, Utc};
-use serde::Deserialize;
+use jsonrpsee::core::client::{Client, Error};
+use serde::{Deserialize, Serialize};
 use serde_with::{formats::Flexible, serde_as, DurationSeconds, TimestampSeconds};
 
+use crate::devices::shelly::switch::rpc::{SwitchClient as GeneratedSwitchClient, WasOnResponse};
 use crate::{
     devices::shelly::common::{
         ActiveEnergy, InitialState, InputMode, LastCommandSource, StatusError, Temperature,
@@ -69,6 +71,22 @@ pub struct SwitchKey {
     pub id: u16,
 }
 
+impl Component {
+    pub async fn toggle(&self, client: &Client) -> Result<WasOnResponse, Error> {
+        client.toggle(self.key.id).await
+    }
+    pub async fn set(
+        &self,
+        client: &Client,
+        on: bool,
+        toggle_after: Option<Duration>,
+    ) -> Result<WasOnResponse, Error> {
+        client
+            .set(self.key.id, on, toggle_after.map(|d| d.into()))
+            .await
+    }
+}
+
 impl From<u16> for SwitchKey {
     fn from(value: u16) -> Self {
         SwitchKey { id: value }
@@ -83,5 +101,44 @@ impl From<SwitchKey> for u16 {
 impl PrefixedKey for SwitchKey {
     fn prefix() -> &'static str {
         "switch:"
+    }
+}
+
+mod rpc {
+    use chrono::Duration;
+    use jsonrpsee::proc_macros::rpc;
+    use serde::{Deserialize, Serialize};
+    use serde_with::{formats::Flexible, serde_as, DurationSeconds};
+
+    #[rpc(client)]
+    pub trait Switch {
+        #[method(name = "Switch.Toggle", param_kind=map)]
+        async fn toggle(&self, id: u16) -> Result<WasOnResponse, ErrorObjectOwned>;
+        #[method(name = "Switch.Set", param_kind=map)]
+        async fn set(
+            &self,
+            id: u16,
+            on: bool,
+            toggle_after: Option<ToggleAfter>,
+        ) -> Result<WasOnResponse, ErrorObjectOwned>;
+    }
+    #[serde_as]
+    #[derive(Serialize, Debug, Clone, PartialEq)]
+    pub struct ToggleAfter(#[serde_as(as = "DurationSeconds<String, Flexible>")] Duration);
+
+    impl From<Duration> for ToggleAfter {
+        fn from(delay: Duration) -> Self {
+            Self(delay)
+        }
+    }
+    impl From<ToggleAfter> for Duration {
+        fn from(value: ToggleAfter) -> Self {
+            value.0
+        }
+    }
+
+    #[derive(Deserialize, Debug, Clone, PartialEq)]
+    pub struct WasOnResponse {
+        pub was_on: bool,
     }
 }

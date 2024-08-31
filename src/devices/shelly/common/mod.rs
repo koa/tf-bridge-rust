@@ -1,14 +1,19 @@
 use crate::devices::shelly::{light, switch};
 use chrono::{DateTime, Utc};
+use jsonrpsee::core::Serialize;
 use macaddr::MacAddr6;
-use serde::de::{Error, Visitor};
-use serde::{Deserialize, Deserializer};
+use serde::{
+    de::{Error, Visitor},
+    Deserialize, Deserializer,
+};
 use serde_json::Value;
 use serde_with::{formats::Flexible, serde_as, TimestampSeconds};
-use std::fmt::{Debug, Formatter};
-use std::str::FromStr;
+use std::{
+    fmt::{Debug, Formatter},
+    str::FromStr,
+};
 
-#[derive(Deserialize, Debug, Clone, PartialEq)]
+#[derive(Deserialize, Serialize, Debug, Clone, PartialEq)]
 pub enum LastCommandSource {
     #[serde(rename = "init")]
     Init,
@@ -18,12 +23,14 @@ pub enum LastCommandSource {
     Http,
     #[serde(rename = "UI")]
     UI,
+    #[serde(rename = "timer")]
+    Timer,
     #[serde(rename = "")]
     None,
 }
 
 #[serde_as]
-#[derive(Deserialize, Debug, Clone, PartialEq)]
+#[derive(Deserialize, Serialize, Debug, Clone, PartialEq)]
 pub struct ActiveEnergy {
     pub total: f64,
     pub by_minute: Option<[f64; 3]>,
@@ -31,7 +38,7 @@ pub struct ActiveEnergy {
     pub minute_ts: DateTime<Utc>,
 }
 
-#[derive(Deserialize, Debug, Clone, PartialEq)]
+#[derive(Deserialize, Serialize, Debug, Clone, PartialEq)]
 pub struct Temperature {
     #[serde(rename = "tC")]
     pub temp_celsius: Option<f32>,
@@ -39,7 +46,7 @@ pub struct Temperature {
     pub temp_fahrenheit: Option<f32>,
 }
 
-#[derive(Deserialize, Debug, Clone, PartialEq)]
+#[derive(Deserialize, Serialize, Debug, Clone, PartialEq)]
 pub enum StatusError {
     #[serde(rename = "overtemp")]
     Overtemp,
@@ -67,7 +74,7 @@ pub enum StatusError {
     CalibrationAbortUnsupportedLoad,
 }
 
-#[derive(Deserialize, Debug, Clone, PartialEq)]
+#[derive(Deserialize, Serialize, Debug, Clone, PartialEq)]
 pub enum InputMode {
     #[serde(rename = "follow")]
     Follow,
@@ -87,7 +94,7 @@ pub enum InputMode {
     Cycle,
 }
 
-#[derive(Deserialize, Debug, Clone, PartialEq)]
+#[derive(Deserialize, Serialize, Debug, Clone, PartialEq)]
 #[serde(rename = "snake_case")]
 pub enum InitialState {
     #[serde(rename = "on")]
@@ -182,7 +189,7 @@ impl<'de> Visitor<'de> for DeviceIdVisitor {
     }
 }
 
-#[derive(Deserialize, Debug, Clone, PartialEq, Copy)]
+#[derive(Deserialize, Serialize, Debug, Clone, PartialEq, Copy)]
 pub enum SslCa {
     #[serde(rename = "*")]
     Disabled,
@@ -192,7 +199,7 @@ pub enum SslCa {
     BuiltIn,
 }
 
-#[derive(Deserialize, Debug, Clone, PartialEq)]
+#[derive(Deserialize, Serialize, Debug, Clone, PartialEq)]
 pub enum IPv4Mode {
     #[serde(rename = "dhcp")]
     Dhcp,

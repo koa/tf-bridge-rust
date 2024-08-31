@@ -4,11 +4,12 @@ use jsonrpsee::{
         ws::{Url, WsTransportClientBuilder},
     },
     core::{
-        client::{self, Client, ClientBuilder, ClientT, Error},
+        client::{self, Client, ClientBuilder, Error},
         ClientError,
     },
 };
 use log::{error, info};
+use std::ops::Deref;
 use std::{
     fmt::{Display, Formatter},
     net::IpAddr,
@@ -18,20 +19,21 @@ use std::{
 use thiserror::Error;
 use tokio::{sync::mpsc, task, time::sleep};
 
-use crate::devices::shelly::shelly::ComponentEntry;
 use crate::{
     data::{
         registry::EventRegistry, settings::Shelly, state::StateUpdateMessage, wiring::ShellyDevices,
     },
-    devices::shelly::shelly::ShellyClient,
+    devices::shelly::shelly::{ComponentEntry, ShellyClient},
     terminator::{TestamentReceiver, TestamentSender},
 };
 
 mod ble;
+mod bthome;
 mod cloud;
 mod common;
 mod eth;
 mod input;
+mod knx;
 mod light;
 mod mqtt;
 mod shelly;
@@ -202,6 +204,7 @@ async fn run_enumeration_listener(
         }
     }
     info!("{addr} Found Components: {}", component_entries.len());
+
     for entry in component_entries {
         match entry {
             ComponentEntry::Input(_) => {}
@@ -214,11 +217,19 @@ async fn run_enumeration_listener(
             ComponentEntry::Mqtt(_) => {}
             ComponentEntry::Switch(switch) => {
                 info!("Switch: {}", switch.key.id);
+                switch
+                    .set(&client, true, Some(chrono::Duration::seconds(2)))
+                    .await
+                    .map_err(enrich_error(addr))?;
             }
             ComponentEntry::Sys(_) => {}
-            ComponentEntry::Wifi(_) => {}
+            ComponentEntry::Wifi(mut wifi) => {
+                wifi.disable(&client).await.map_err(enrich_error(addr))?;
+            }
             ComponentEntry::Ui(_) => {}
             ComponentEntry::Ws(_) => {}
+            ComponentEntry::Bthome(_) => {}
+            ComponentEntry::Knx(_) => {}
         }
     }
     Ok(())
