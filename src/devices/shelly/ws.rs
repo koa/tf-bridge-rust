@@ -15,17 +15,11 @@ pub struct Status {
 pub struct Configuration {
     pub enable: bool,
     pub server: Option<Box<str>>,
-    pub client_id: Option<Box<str>>,
-    pub user: Option<Box<str>>,
-    pub ssl_ca: Option<SslCa>,
-    pub topic_prefix: Option<Box<str>>,
-    pub rpc_ntf: bool,
-    pub status_ntf: bool,
-    pub use_client_cert: bool,
-    pub enable_control: bool,
+    pub ssl_ca: SslCa,
 }
+
 #[derive(Deserialize, Debug, Clone, PartialEq)]
 pub enum Key {
-    #[serde(rename = "mqtt")]
-    Mqtt,
+    #[serde(rename = "ws")]
+    Ws,
 }

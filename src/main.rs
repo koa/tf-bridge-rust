@@ -1,6 +1,6 @@
 use std::{error::Error, fmt::Debug, fs::File, future::Future, time::Duration};
 
-use actix_web::{App, get, HttpServer};
+use actix_web::{get, App, HttpServer};
 use actix_web_prometheus::PrometheusMetricsBuilder;
 use env_logger::{Env, TimestampPrecision};
 use log::{error, info};
@@ -10,7 +10,7 @@ use tokio::{
     sync::mpsc::{self, Sender},
     time::sleep,
 };
-use tokio_stream::{once, StreamExt, wrappers::ReceiverStream};
+use tokio_stream::{once, wrappers::ReceiverStream, StreamExt};
 
 use crate::{
     controller::{
@@ -21,7 +21,7 @@ use crate::{
     data::{
         google_data::read_sheet_data,
         registry::EventRegistry,
-        settings::{CONFIG, Shelly, Tinkerforge},
+        settings::{Shelly, Tinkerforge, CONFIG},
         state::{State, StateUpdateMessage},
         wiring::{Controllers, MotionDetector, Wiring},
     },

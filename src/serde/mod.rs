@@ -1,16 +1,19 @@
+use macaddr::MacAddr6;
+use serde::de::{Error, Visitor};
+use serde::{Deserialize, Deserializer};
 use std::cmp::Ordering;
 use std::fmt::{Display, Formatter, Write};
 use std::marker::PhantomData;
 use std::num::ParseIntError;
 use std::ops::Deref;
 use std::str::FromStr;
-
-use serde::{Deserialize, Deserializer};
-use serde::de::{Error, Visitor};
 use thiserror::Error;
 
 #[derive(Debug, Clone)]
 pub struct SerdeStringKey<K: PrefixedKey>(K);
+
+#[derive(Debug, Clone, Copy, Ord, PartialOrd, Eq, PartialEq, Hash)]
+pub struct SerializableMacAddress(MacAddr6);
 
 impl<K: PrefixedKey + PartialOrd> PartialOrd for SerdeStringKey<K> {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
@@ -112,6 +115,33 @@ impl<'de, K: PrefixedKey> Visitor<'de> for KeyVisitor<K> {
             parse_key(K::prefix(), v)
                 .map_err(|e| Error::custom(e))?
                 .into(),
+        ))
+    }
+}
+
+impl<'de> Deserialize<'de> for SerializableMacAddress {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        deserializer.deserialize_str(MacVisitor)
+    }
+}
+
+struct MacVisitor;
+impl Visitor<'_> for MacVisitor {
+    type Value = SerializableMacAddress;
+
+    fn expecting(&self, formatter: &mut Formatter) -> std::fmt::Result {
+        formatter.write_str("a MAC address")
+    }
+
+    fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
+    where
+        E: Error,
+    {
+        Ok(SerializableMacAddress(
+            MacAddr6::from_str(v).map_err(|e| Error::custom(e))?,
         ))
     }
 }

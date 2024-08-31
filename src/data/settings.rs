@@ -1,3 +1,4 @@
+use std::fmt::Debug;
 use std::io;
 use std::net::{IpAddr, Ipv6Addr};
 
@@ -74,8 +75,9 @@ pub struct GoogleSheet {
     timestamp_format: Box<str>,
     tinkerforge_endpoints: GoogleEndpointData,
     shelly_endpoints: GoogleEndpointData,
-    light: GoogleLightData,
-    light_templates: GoogleLightTemplateData,
+    light_tinkerforge: Option<GoogleLightData<TinkerforgeLightAddress>>,
+    light_shelly: Option<GoogleLightData<ShellyLightAddress>>,
+    light_templates: GoogleTinkerforgeLightTemplateData,
     buttons: GoogleButtonData,
     button_templates: GoogleButtonTemplate,
     room_controllers: GoogleRoomController,
@@ -116,7 +118,7 @@ pub struct GoogleButtonTemplate {
 }
 
 #[derive(Deserialize, Debug)]
-pub struct GoogleLightTemplateData {
+pub struct GoogleTinkerforgeLightTemplateData {
     sheet: Box<str>,
     range: Box<str>,
     name_column: Box<str>,
@@ -126,15 +128,25 @@ pub struct GoogleLightTemplateData {
 }
 
 #[derive(Deserialize, Debug)]
-pub struct GoogleLightData {
+pub struct TinkerforgeLightAddress {
+    device_address: Box<str>,
+    bus_start_address: Box<str>,
+}
+#[derive(Deserialize, Debug)]
+pub struct ShellyLightAddress {
+    device_name: Box<str>,
+    start_idx: Box<str>,
+}
+
+#[derive(Deserialize, Debug)]
+pub struct GoogleLightData<A> {
     sheet: Box<str>,
     range: Box<str>,
     room_id: Box<str>,
-    //light_id: Box<str>,
     light_idx: Box<str>,
     template: Box<str>,
-    device_address: Box<str>,
-    bus_start_address: Box<str>,
+    #[serde(flatten)]
+    address: A,
     manual_buttons: Box<[Box<str>]>,
     presence_detectors: Box<[Box<str>]>,
     touchscreen_whitebalance: Box<str>,
@@ -237,11 +249,11 @@ impl GoogleSheet {
         &self.spreadsheet_id
     }
 
-    pub fn light(&self) -> &GoogleLightData {
-        &self.light
+    pub fn light_tinkerforge(&self) -> Option<&GoogleLightData<TinkerforgeLightAddress>> {
+        self.light_tinkerforge.as_ref()
     }
 
-    pub fn light_templates(&self) -> &GoogleLightTemplateData {
+    pub fn light_templates(&self) -> &GoogleTinkerforgeLightTemplateData {
         &self.light_templates
     }
 
@@ -298,7 +310,7 @@ impl GoogleEndpointData {
     }
 }
 
-impl GoogleLightTemplateData {
+impl GoogleTinkerforgeLightTemplateData {
     pub fn sheet(&self) -> &str {
         &self.sheet
     }
@@ -319,7 +331,7 @@ impl GoogleLightTemplateData {
     }
 }
 
-impl GoogleLightData {
+impl<A> GoogleLightData<A> {
     pub fn range(&self) -> &str {
         &self.range
     }
@@ -340,12 +352,6 @@ impl GoogleLightData {
     pub fn template(&self) -> &str {
         &self.template
     }
-    pub fn device_address(&self) -> &str {
-        &self.device_address
-    }
-    pub fn bus_start_address(&self) -> &str {
-        &self.bus_start_address
-    }
     pub fn manual_buttons(&self) -> &[Box<str>] {
         &self.manual_buttons
     }
@@ -360,6 +366,22 @@ impl GoogleLightData {
     }
     pub fn state(&self) -> &str {
         &self.state
+    }
+}
+impl GoogleLightData<TinkerforgeLightAddress> {
+    pub fn device_address(&self) -> &str {
+        &self.address.device_address
+    }
+    pub fn bus_start_address(&self) -> &str {
+        &self.address.bus_start_address
+    }
+}
+impl GoogleLightData<ShellyLightAddress> {
+    pub fn device_name(&self) -> &str {
+        &self.address.device_name
+    }
+    pub fn start_idx(&self) -> &str {
+        &self.address.start_idx
     }
 }
 

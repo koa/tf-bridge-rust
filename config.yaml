@@ -1,15 +1,15 @@
 server: { }
 tinkerforge:
-  endpoints: #[]
-    #- address: 10.192.64.23
-    #- address: 10.192.66.26
-    - address: 127.0.0.1
+  endpoints: [ ]
+  #- address: 10.192.64.23
+  #- address: 10.192.66.26
+  #- address: 127.0.0.1
 shelly:
   endpoints: [ ]
   #- address: 10.192.5.6
 google-sheet:
   key_file: sa-development.json
-  spreadsheet_id: 1a2OKCYMOUxE7PfjLjPgvIAf7WY9Y6uTMiXkEKHLlDoo
+  spreadsheet_id: 107qejIW-1g04V3YhxrRQtNYg0m9zMAPf74A3ISNlxvw
   timestamp_format: '%d.%b %H:%M'
   tinkerforge_endpoints:
     sheet: Tinkerforge Endpoints
@@ -30,7 +30,7 @@ google-sheet:
     discriminator_column: Typ
     temperature_warm_column: Lichttemperatur Warm
     temperature_cold_column: Lichttemperatur Kalt
-  light:
+  light_tinkerforge:
     sheet: Lichter
     range: A:U
     room_id: Raum Nummer
@@ -50,15 +50,35 @@ google-sheet:
     touchscreen_whitebalance: Touchscreen Farbe
     touchscreen_brightness: Touchscreen Helligkeit
     state: Status Dev
+  light_shelly:
+    sheet: Lichter
+    range: A:U
+    room_id: Raum Nummer
+    light_id: Id
+    light_idx: Idx
+    template: Typ
+    device_name: Dimmer
+    start_idx: Anschluss
+    manual_buttons:
+      - Taster 1
+      - Taster 2
+      - Taster 3
+    presence_detectors:
+      - Bewegungsmelder 1
+      - Bewegungsmelder 2
+      - Bewegungsmelder 3
+    touchscreen_whitebalance: Touchscreen Farbe
+    touchscreen_brightness: Touchscreen Helligkeit
+    state: Status Dev
   button_templates:
     sheet: Taster Modelle
-    range: A:G
+    range: A:H
     name: Name
     discriminator: Typ
     sub_devices: variants
   buttons:
     sheet: Taster
-    range: A:K
+    range: A:L
     room_id: Raum Nummer
     button_id: id
     button_idx: Idx
@@ -82,7 +102,7 @@ google-sheet:
     temperature_state: Status Temperaturfühler Dev
   motion_detectors:
     sheet: Bewegungsmelder
-    range: A:J
+    range: A:K
     room_id: Raum Nummer
     device_address: Adresse
     id: id

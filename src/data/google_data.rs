@@ -6,13 +6,11 @@ use std::{
     io,
     net::IpAddr,
     str::FromStr,
-    time::Duration,
-    time::SystemTime,
+    time::{Duration, SystemTime},
     vec::IntoIter,
 };
 
-use chrono::format::StrftimeItems;
-use chrono::{DateTime, Local};
+use chrono::{format::StrftimeItems, DateTime, Local};
 use google_sheets4::{
     api::{BatchUpdateValuesRequest, CellData, SpreadsheetMethods, ValueRange},
     hyper::{client::HttpConnector, Client},
@@ -25,22 +23,21 @@ use serde::Deserialize;
 use thiserror::Error;
 use tinkerforge_async::{base58::Uid, ip_connection::Version, DeviceIdentifier};
 
-use crate::data::settings::GoogleEndpointData;
-use crate::data::state::SpitfpErrorCounters;
-use crate::data::wiring::ShellyDevices;
 use crate::{
     data::{
         registry::{
             BrightnessKey, ClockKey, DualButtonKey, LightColorKey, SingleButtonKey,
             SwitchOutputKey, TemperatureKey,
         },
-        settings::{GoogleError, GoogleSheet, CONFIG},
-        state::{BrickletConnectionData, BrickletMetadata, ConnectionState, State},
+        settings::{GoogleEndpointData, GoogleError, GoogleSheet, CONFIG},
+        state::{
+            BrickletConnectionData, BrickletMetadata, ConnectionState, SpitfpErrorCounters, State,
+        },
         wiring::{
             ButtonSetting, Controllers, DmxConfigEntry, DmxSettings, DualInputDimmer,
             DualInputSwitch, HeatController, IoSettings, MotionDetector, MotionDetectorSettings,
             Orientation, RelayChannelEntry, RelaySettings, RingController, ScreenSettings,
-            TemperatureSettings, TinkerforgeDevices, Wiring,
+            ShellyDevices, TemperatureSettings, TinkerforgeDevices, Wiring,
         },
         DeviceInRoom, Room, SubDeviceInRoom,
     },
@@ -1012,102 +1009,103 @@ impl GoogleSheetWireBuilder {
                 &mut self.device_id_in_room
             }
         }
-        let light_config = context.config.light();
-        let button_columns = light_config
-            .manual_buttons()
-            .iter()
-            .map(|c| c.as_ref())
-            .collect::<Vec<_>>();
-        let presence_detector_columns = light_config
-            .presence_detectors()
-            .iter()
-            .map(|c| c.as_ref())
-            .collect::<Vec<_>>();
         let mut device_ids_of_rooms = HashMap::<_, Vec<_>>::new();
+        if let Some(light_config) = context.config.light_tinkerforge() {
+            let button_columns = light_config
+                .manual_buttons()
+                .iter()
+                .map(|c| c.as_ref())
+                .collect::<Vec<_>>();
+            let presence_detector_columns = light_config
+                .presence_detectors()
+                .iter()
+                .map(|c| c.as_ref())
+                .collect::<Vec<_>>();
 
-        for (
-            [room, light_idx, template, address, start_channel, whitebalance, brightness, old_state],
-            [buttons, presence_detectors],
-        ) in GoogleTable::connect(
-            &context.spreadsheet_methods,
-            [
-                light_config.room_id(),
-                light_config.light_idx(),
-                light_config.template(),
-                light_config.device_address(),
-                light_config.bus_start_address(),
-                light_config.touchscreen_whitebalance(),
-                light_config.touchscreen_brightness(),
-                light_config.state(),
-            ],
-            [&button_columns, &presence_detector_columns],
-            context.config.spreadsheet_id(),
-            light_config.sheet(),
-            light_config.range(),
-        )
-        .await?
-        {
-            if let (
-                Some(room),
-                device_id_in_room,
-                Some(light_template),
-                Some(device_address),
-                Some(bus_start_address),
-                manual_buttons,
-                presence_detectors,
-                touchscreen_whitebalance,
-                touchscreen_brightness,
-                old_state,
-            ) = (
-                room.get_content().map(Room::from_str).and_then(Result::ok),
-                DeviceIdxCell(light_idx),
-                template
-                    .get_content()
-                    .and_then(|t| light_template_map.get(t)),
-                address
-                    .get_content()
-                    .map(Uid::from_str)
-                    .and_then(Result::ok),
-                start_channel.get_integer(),
-                buttons
-                    .iter()
-                    .filter_map(|cell| GoogleCellData::get_content(cell))
-                    .filter(|s| !s.is_empty())
-                    .map(<&str>::into)
-                    .collect::<Vec<_>>()
-                    .into_boxed_slice(),
-                presence_detectors
-                    .iter()
-                    .filter_map(|cell| cell.get_content())
-                    .filter(|s| !s.is_empty())
-                    .map(<&str>::into)
-                    .collect::<Vec<_>>()
-                    .into_boxed_slice(),
-                whitebalance.get_content().map(<&str>::into),
-                brightness.get_content().map(<&str>::into),
-                old_state,
-            ) {
-                device_ids_of_rooms
-                    .entry(room)
-                    .or_default()
-                    .push(LightRowContent {
-                        light_template,
-                        device_id_in_room,
+            for (
+                [room, light_idx, template, address, start_channel, whitebalance, brightness, old_state],
+                [buttons, presence_detectors],
+            ) in GoogleTable::connect(
+                &context.spreadsheet_methods,
+                [
+                    light_config.room_id(),
+                    light_config.light_idx(),
+                    light_config.template(),
+                    light_config.device_address(),
+                    light_config.bus_start_address(),
+                    light_config.touchscreen_whitebalance(),
+                    light_config.touchscreen_brightness(),
+                    light_config.state(),
+                ],
+                [&button_columns, &presence_detector_columns],
+                context.config.spreadsheet_id(),
+                light_config.sheet(),
+                light_config.range(),
+            )
+            .await?
+            {
+                if let (
+                    Some(room),
+                    device_id_in_room,
+                    Some(light_template),
+                    Some(device_address),
+                    Some(bus_start_address),
+                    manual_buttons,
+                    presence_detectors,
+                    touchscreen_whitebalance,
+                    touchscreen_brightness,
+                    old_state,
+                ) = (
+                    room.get_content().map(Room::from_str).and_then(Result::ok),
+                    DeviceIdxCell(light_idx),
+                    template
+                        .get_content()
+                        .and_then(|t| light_template_map.get(t)),
+                    address
+                        .get_content()
+                        .map(Uid::from_str)
+                        .and_then(Result::ok),
+                    start_channel.get_integer(),
+                    buttons
+                        .iter()
+                        .filter_map(|cell| GoogleCellData::get_content(cell))
+                        .filter(|s| !s.is_empty())
+                        .map(<&str>::into)
+                        .collect::<Vec<_>>()
+                        .into_boxed_slice(),
+                    presence_detectors
+                        .iter()
+                        .filter_map(|cell| cell.get_content())
+                        .filter(|s| !s.is_empty())
+                        .map(<&str>::into)
+                        .collect::<Vec<_>>()
+                        .into_boxed_slice(),
+                    whitebalance.get_content().map(<&str>::into),
+                    brightness.get_content().map(<&str>::into),
+                    old_state,
+                ) {
+                    device_ids_of_rooms
+                        .entry(room)
+                        .or_default()
+                        .push(LightRowContent {
+                            light_template,
+                            device_id_in_room,
+                            device_address,
+                            bus_start_address: bus_start_address as u16,
+                            manual_buttons,
+                            presence_detectors,
+                            touchscreen_whitebalance,
+                            touchscreen_brightness,
+                        });
+                    update_state_new(
+                        |v| self.updates.push(v),
+                        context.state,
+                        &old_state,
                         device_address,
-                        bus_start_address: bus_start_address as u16,
-                        manual_buttons,
-                        presence_detectors,
-                        touchscreen_whitebalance,
-                        touchscreen_brightness,
-                    });
-                update_state_new(
-                    |v| self.updates.push(v),
-                    context.state,
-                    &old_state,
-                    device_address,
-                    &context.timestamp_format,
-                );
-                //info!("Room: {room:?}, idx: {coordinates}");
+                        &context.timestamp_format,
+                    );
+                    //info!("Room: {room:?}, idx: {coordinates}");
+                }
             }
         }
         let light_device_rows = fill_device_idx(|v| self.updates.push(v), device_ids_of_rooms);

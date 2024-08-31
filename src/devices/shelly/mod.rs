@@ -18,11 +18,12 @@ use std::{
 use thiserror::Error;
 use tokio::{sync::mpsc, task, time::sleep};
 
+use crate::devices::shelly::shelly::ComponentEntry;
 use crate::{
     data::{
         registry::EventRegistry, settings::Shelly, state::StateUpdateMessage, wiring::ShellyDevices,
     },
-    devices::shelly::shelly::{GetComponentsResponse, ShellyClient},
+    devices::shelly::shelly::ShellyClient,
     terminator::{TestamentReceiver, TestamentSender},
 };
 
@@ -35,6 +36,10 @@ mod light;
 mod mqtt;
 mod shelly;
 mod switch;
+mod sys;
+mod ui;
+mod wifi;
+mod ws;
 
 pub fn activate_devices(
     shelly: &Shelly,
@@ -157,16 +162,25 @@ async fn run_enumeration_listener(
         .await
         .map_err(enrich_error(addr))?;
     info!("Device Info at {addr}: {result:#?}");
+    status_updater
+        .send(StateUpdateMessage::EndpointConnected(addr))
+        .await
+        .map_err(enrich_error(addr))?;
     let mut offset = 0;
     let mut component_entries = Vec::new();
     loop {
-        let result1 = client.get_components(offset, false).await;
-        match result1 {
+        info!("{addr} fetch from offset {offset}");
+        match client.get_components(offset, false).await {
             Ok(response) => {
                 for entry in response.components().iter().cloned() {
                     component_entries.push(entry);
                 }
-                if response.total() as usize >= component_entries.len() {
+                info!(
+                    "{addr} total: {}, received: {}",
+                    response.total(),
+                    response.components().len()
+                );
+                if response.total() as usize <= component_entries.len() {
                     break;
                 }
                 offset += response.components().len() as u16;
@@ -187,7 +201,26 @@ async fn run_enumeration_listener(
             }
         }
     }
-    //info!("Found Components: {component_entries:#?}");
+    info!("{addr} Found Components: {}", component_entries.len());
+    for entry in component_entries {
+        match entry {
+            ComponentEntry::Input(_) => {}
+            ComponentEntry::Ble(_) => {}
+            ComponentEntry::Cloud(_) => {}
+            ComponentEntry::Eth(_) => {}
+            ComponentEntry::Light(light) => {
+                info!("Light: {}", light.key.id);
+            }
+            ComponentEntry::Mqtt(_) => {}
+            ComponentEntry::Switch(switch) => {
+                info!("Switch: {}", switch.key.id);
+            }
+            ComponentEntry::Sys(_) => {}
+            ComponentEntry::Wifi(_) => {}
+            ComponentEntry::Ui(_) => {}
+            ComponentEntry::Ws(_) => {}
+        }
+    }
     Ok(())
 }
 
@@ -210,6 +243,8 @@ enum ShellyError {
     WsHandshakeError(#[from] WsHandshakeError),
     #[error("JSON RPC Error: {0}")]
     ClientError(#[from] ClientError),
+    #[error("Cannot update status message {0}")]
+    StatusUpdateMessage(#[from] mpsc::error::SendError<StateUpdateMessage>),
 }
 
 #[derive(Error, Debug)]

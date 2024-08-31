@@ -1,8 +1,12 @@
+use crate::devices::shelly::{light, switch};
 use chrono::{DateTime, Utc};
-use serde::Deserialize;
+use macaddr::MacAddr6;
+use serde::de::{Error, Visitor};
+use serde::{Deserialize, Deserializer};
+use serde_json::Value;
 use serde_with::{formats::Flexible, serde_as, TimestampSeconds};
-
-use crate::devices::shelly::{light, shelly::DeviceId, switch};
+use std::fmt::{Debug, Formatter};
+use std::str::FromStr;
 
 #[derive(Deserialize, Debug, Clone, PartialEq)]
 pub enum LastCommandSource {
@@ -115,4 +119,83 @@ pub enum ActorKey {
 pub struct ActorId {
     device: DeviceId,
     actor: ActorKey,
+}
+
+#[derive(Clone, PartialEq, Copy)]
+pub struct DeviceId {
+    pub device_type: DeviceType,
+    pub mac: MacAddr6,
+}
+
+impl Debug for DeviceId {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        self.device_type.fmt(f)?;
+        f.write_str("-")?;
+        let bytes = self.mac.into_array();
+        f.write_fmt(format_args!(
+            "{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+            bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5],
+        ))
+    }
+}
+
+impl<'de> Deserialize<'de> for DeviceId {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        deserializer.deserialize_str(DeviceIdVisitor)
+    }
+}
+
+struct DeviceIdVisitor;
+
+#[derive(Deserialize, Clone, PartialEq, Copy, Debug)]
+pub enum DeviceType {
+    #[serde(rename = "shellyprodm2pm")]
+    ShellyProDm2Pm,
+    #[serde(rename = "shellypro4pm")]
+    ShellyPro4Pm,
+}
+
+impl<'de> Visitor<'de> for DeviceIdVisitor {
+    type Value = DeviceId;
+
+    fn expecting(&self, formatter: &mut Formatter) -> std::fmt::Result {
+        formatter.write_str("parse shelly device id into a Copy-Struct")
+    }
+
+    fn visit_str<E>(self, v: &str) -> Result<DeviceId, E>
+    where
+        E: Error,
+    {
+        if let Some((type_str, mac_str)) = v.split_once("-") {
+            println!("Type str: {type_str}");
+            let device_type = serde_json::from_value(Value::from(type_str))
+                .map_err(|e| Error::custom(format!("Cannot parse type value {type_str}: {e}")))?;
+            let mac = MacAddr6::from_str(mac_str)
+                .map_err(|e| Error::custom(format!("Cannot parse mac address {mac_str}: {e}")))?;
+            Ok(DeviceId { device_type, mac })
+        } else {
+            Err(Error::custom(format!("Missing delimiter in {v}")))
+        }
+    }
+}
+
+#[derive(Deserialize, Debug, Clone, PartialEq, Copy)]
+pub enum SslCa {
+    #[serde(rename = "*")]
+    Disabled,
+    #[serde(rename = "user_ca.pem")]
+    User,
+    #[serde(rename = "ca.pem")]
+    BuiltIn,
+}
+
+#[derive(Deserialize, Debug, Clone, PartialEq)]
+pub enum IPv4Mode {
+    #[serde(rename = "dhcp")]
+    Dhcp,
+    #[serde(rename = "static")]
+    Static,
 }
