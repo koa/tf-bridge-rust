@@ -1,6 +1,6 @@
 use chrono::{DateTime, Duration, Utc};
 use google_sheets4::client::serde_with::serde_as;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_with::{formats::Flexible, DurationSeconds, TimestampSeconds};
 
 #[derive(Deserialize, Debug, Clone, PartialEq)]
@@ -28,10 +28,10 @@ pub enum BtHomeError {
     ObserverDisabled,
     BluetoothDisabled,
 }
-#[derive(Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct Configuration {}
 
-#[derive(Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Copy, Hash, Eq, Ord, PartialOrd)]
 pub enum Key {
     #[serde(rename = "bthome")]
     Bthome,

@@ -134,8 +134,8 @@ async fn config_update_loop(
         match message {
             MainLoopEvent::StatusUpdateMessage(update) => {
                 state_received = true;
-                if known_state.process_msg(update) {
-                    match update {
+                if known_state.process_msg(update.clone()) {
+                    match &update {
                         StateUpdateMessage::EndpointConnected(ip) => {
                             info!("Endpoint {ip} connected");
                         }
@@ -151,8 +151,15 @@ async fn config_update_loop(
                         StateUpdateMessage::SpitfpMetrics { uid, .. } => {
                             info!("Bricklet {uid} updated metrics");
                         }
-                        StateUpdateMessage::CommunicationFailed { uid, .. } => {
+                        StateUpdateMessage::BrickletCommunicationFailed { uid, .. } => {
                             info!("Bricklet {uid} failed communication");
+                        }
+                        StateUpdateMessage::ShellyComponentFound {
+                            id,
+                            endpoint,
+                            component,
+                        } => {
+                            info!("Shelly component {id} {:?} found", component.key());
                         }
                     }
                     fech_next_in(main_tx.clone(), &mut config_timer, Duration::from_secs(2));

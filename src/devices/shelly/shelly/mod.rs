@@ -1,15 +1,16 @@
-use std::{fmt::Debug, str::FromStr};
-
 use crate::devices::shelly::common::DeviceId;
 use crate::devices::shelly::{
     ble, bthome, cloud, eth, input, knx, light, mqtt, switch, sys, ui, wifi, ws,
 };
+use jsonrpsee::core::Serialize;
 use jsonrpsee::proc_macros::rpc;
 use serde::{
     de::{Error, Visitor},
     Deserialize, Deserializer,
 };
 use serde_json::value::RawValue;
+use std::fmt::{Display, Formatter};
+pub use std::{fmt::Debug, str::FromStr};
 
 #[rpc(client)]
 pub trait Shelly {
@@ -33,19 +34,19 @@ pub trait Shelly {
 
 #[derive(Deserialize, Debug)]
 pub struct GetDeviceInfoResponse {
-    name: Option<Box<str>>,
-    id: DeviceId,
-    model: Box<str>,
-    gen: u8,
-    fw_id: Box<str>,
-    ver: Box<str>,
-    app: Box<str>,
-    profile: Option<Box<str>>,
-    auth_en: bool,
-    auth_domain: Option<Box<str>>,
-    discoverable: Option<bool>,
-    key: Option<Box<str>>,
-    batch: Option<Box<str>>,
+    pub name: Option<Box<str>>,
+    pub id: DeviceId,
+    pub model: Box<str>,
+    pub gen: u8,
+    pub fw_id: Box<str>,
+    pub ver: Box<str>,
+    pub app: Box<str>,
+    pub profile: Option<Box<str>>,
+    pub auth_en: bool,
+    pub auth_domain: Option<Box<str>>,
+    pub discoverable: Option<bool>,
+    pub key: Option<Box<str>>,
+    pub batch: Option<Box<str>>,
     fw_sbits: Option<Box<str>>,
 }
 #[derive(Deserialize, Debug)]
@@ -71,7 +72,7 @@ impl GetComponentsResponse {
     }
 }
 
-#[derive(Deserialize, Debug, Clone)]
+#[derive(Debug, Deserialize, Clone, PartialEq)]
 #[serde(untagged)]
 pub enum ComponentEntry {
     Input(input::Component),
@@ -89,15 +90,98 @@ pub enum ComponentEntry {
     Knx(knx::Component),
 }
 
-#[derive(Clone, PartialEq, Copy)]
+#[derive(Clone, PartialEq, Copy, Hash, Eq)]
 pub enum SwitchingKey {
     Switch(switch::Key),
     Light(light::Key),
 }
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Copy, Hash, Eq, Ord, PartialOrd)]
+pub enum ComponentKey {
+    Input(input::Key),
+    Ble(ble::Key),
+    Cloud(cloud::Key),
+    Eth(eth::Key),
+    Light(light::Key),
+    Mqtt(mqtt::Key),
+    Switch(switch::Key),
+    Sys(sys::Key),
+    Ws(ws::Key),
+    Wifi(wifi::Key),
+    Ui(ui::Key),
+    Bthome(bthome::Key),
+    Knx(knx::Key),
+}
+#[derive(Debug, Clone, PartialEq, Copy, Hash, Eq, Ord, PartialOrd)]
+pub struct ComponentAddress {
+    pub device: DeviceId,
+    pub key: ComponentKey,
+}
+
+impl Display for ComponentAddress {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}:{}", self.device, self.key)
+    }
+}
+impl Display for ComponentKey {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ComponentKey::Input(k) => std::fmt::Display::fmt(&k, f),
+            ComponentKey::Ble(k) => k.fmt(f),
+            ComponentKey::Cloud(k) => k.fmt(f),
+            ComponentKey::Eth(k) => k.fmt(f),
+            ComponentKey::Light(k) => std::fmt::Display::fmt(&k, f),
+            ComponentKey::Mqtt(k) => k.fmt(f),
+            ComponentKey::Switch(k) => std::fmt::Display::fmt(&k, f),
+            ComponentKey::Sys(k) => k.fmt(f),
+            ComponentKey::Ws(k) => k.fmt(f),
+            ComponentKey::Wifi(k) => k.fmt(f),
+            ComponentKey::Ui(k) => k.fmt(f),
+            ComponentKey::Bthome(k) => k.fmt(f),
+            ComponentKey::Knx(k) => k.fmt(f),
+        }
+    }
+}
+
 #[derive(Clone, PartialEq, Copy)]
 pub struct SwitchingKeyId {
     pub device: DeviceId,
     pub key: SwitchingKey,
+}
+impl ComponentEntry {
+    pub fn key(&self) -> ComponentKey {
+        match self {
+            ComponentEntry::Input(c) => ComponentKey::Input(c.key),
+            ComponentEntry::Ble(c) => ComponentKey::Ble(c.key),
+            ComponentEntry::Cloud(c) => ComponentKey::Cloud(c.key),
+            ComponentEntry::Eth(c) => ComponentKey::Eth(c.key),
+            ComponentEntry::Light(c) => ComponentKey::Light(c.key),
+            ComponentEntry::Mqtt(c) => ComponentKey::Mqtt(c.key),
+            ComponentEntry::Switch(c) => ComponentKey::Switch(c.key),
+            ComponentEntry::Sys(c) => ComponentKey::Sys(c.key),
+            ComponentEntry::Ws(c) => ComponentKey::Ws(c.key),
+            ComponentEntry::Wifi(c) => ComponentKey::Wifi(c.key),
+            ComponentEntry::Ui(c) => ComponentKey::Ui(c.key),
+            ComponentEntry::Bthome(c) => ComponentKey::Bthome(c.key),
+            ComponentEntry::Knx(c) => ComponentKey::Knx(c.key),
+        }
+    }
+    pub fn type_name(&self) -> &'static str {
+        match self {
+            ComponentEntry::Input(_) => "Input",
+            ComponentEntry::Ble(_) => "Ble",
+            ComponentEntry::Cloud(_) => "Cloud",
+            ComponentEntry::Eth(_) => "Eth",
+            ComponentEntry::Light(_) => "Light",
+            ComponentEntry::Mqtt(_) => "Mqtt",
+            ComponentEntry::Switch(_) => "Switch",
+            ComponentEntry::Sys(_) => "Sys",
+            ComponentEntry::Ws(_) => "Ws",
+            ComponentEntry::Wifi(_) => "Wifi",
+            ComponentEntry::Ui(_) => "Ui",
+            ComponentEntry::Bthome(_) => "Bthome",
+            ComponentEntry::Knx(_) => "Knx",
+        }
+    }
 }
 
 #[cfg(test)]

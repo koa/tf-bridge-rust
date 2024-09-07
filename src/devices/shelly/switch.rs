@@ -66,7 +66,7 @@ pub struct Configuration {
 #[derive(Deserialize, Debug, Clone, PartialEq)]
 pub struct StatusTransition {}
 
-#[derive(Debug, Clone, PartialEq, Copy)]
+#[derive(Debug, Clone, PartialEq, Copy, Hash, Eq, Ord, PartialOrd)]
 pub struct SwitchKey {
     pub id: u16,
 }

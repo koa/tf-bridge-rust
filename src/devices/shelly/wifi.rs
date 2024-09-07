@@ -71,7 +71,7 @@ pub struct ApRangeExtender {
     pub enable: bool,
 }
 
-#[derive(Deserialize, Serialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Copy, Hash, Eq, Ord, PartialOrd)]
 pub enum Key {
     #[serde(rename = "wifi")]
     Wifi,

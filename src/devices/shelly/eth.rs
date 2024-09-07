@@ -1,7 +1,7 @@
 use std::net::IpAddr;
 
 use crate::devices::shelly::common::IPv4Mode;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 #[derive(Deserialize, Debug, Clone, PartialEq)]
 pub struct Component {
@@ -22,7 +22,7 @@ pub struct Configuration {
     pub gw: Option<IpAddr>,
     pub nameserver: Option<IpAddr>,
 }
-#[derive(Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Copy, Hash, Eq, Ord, PartialOrd)]
 pub enum Key {
     #[serde(rename = "eth")]
     Eth,

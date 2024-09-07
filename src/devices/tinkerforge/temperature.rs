@@ -45,7 +45,7 @@ pub fn handle_temperature(
         {
             error!("Error processing temperature: {error}");
             status_updater
-                .send(StateUpdateMessage::CommunicationFailed { uid })
+                .send(StateUpdateMessage::BrickletCommunicationFailed { uid })
                 .await
                 .expect("Status handler down");
         }

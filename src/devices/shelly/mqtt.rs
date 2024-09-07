@@ -1,5 +1,5 @@
 use crate::devices::shelly::common::SslCa;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 #[derive(Deserialize, Debug, Clone, PartialEq)]
 pub struct Component {
@@ -24,7 +24,7 @@ pub struct Configuration {
     pub use_client_cert: bool,
     pub enable_control: bool,
 }
-#[derive(Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Copy, Hash, Eq, Ord, PartialOrd)]
 pub enum Key {
     #[serde(rename = "mqtt")]
     Mqtt,

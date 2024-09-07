@@ -8,6 +8,7 @@ use serde::{
 };
 use serde_json::Value;
 use serde_with::{formats::Flexible, serde_as, TimestampSeconds};
+use std::fmt::Display;
 use std::{
     fmt::{Debug, Formatter},
     str::FromStr,
@@ -128,13 +129,24 @@ pub struct ActorId {
     actor: ActorKey,
 }
 
-#[derive(Clone, PartialEq, Copy)]
+#[derive(Clone, PartialEq, Copy, Eq, Ord, PartialOrd, Hash)]
 pub struct DeviceId {
     pub device_type: DeviceType,
     pub mac: MacAddr6,
 }
 
 impl Debug for DeviceId {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        self.device_type.fmt(f)?;
+        f.write_str("-")?;
+        let bytes = self.mac.into_array();
+        f.write_fmt(format_args!(
+            "{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
+            bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5],
+        ))
+    }
+}
+impl Display for DeviceId {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         self.device_type.fmt(f)?;
         f.write_str("-")?;
@@ -157,7 +169,7 @@ impl<'de> Deserialize<'de> for DeviceId {
 
 struct DeviceIdVisitor;
 
-#[derive(Deserialize, Clone, PartialEq, Copy, Debug)]
+#[derive(Deserialize, Clone, PartialEq, Copy, Debug, Eq, Ord, PartialOrd, Hash)]
 pub enum DeviceType {
     #[serde(rename = "shellyprodm2pm")]
     ShellyProDm2Pm,

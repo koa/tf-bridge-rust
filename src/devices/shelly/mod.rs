@@ -30,13 +30,13 @@ use crate::{
 mod ble;
 mod bthome;
 mod cloud;
-mod common;
+pub mod common;
 mod eth;
 mod input;
 mod knx;
 mod light;
 mod mqtt;
-mod shelly;
+pub mod shelly;
 mod switch;
 mod sys;
 mod ui;
@@ -164,6 +164,7 @@ async fn run_enumeration_listener(
         .await
         .map_err(enrich_error(addr))?;
     info!("Device Info at {addr}: {result:#?}");
+
     status_updater
         .send(StateUpdateMessage::EndpointConnected(addr))
         .await
@@ -206,6 +207,14 @@ async fn run_enumeration_listener(
     info!("{addr} Found Components: {}", component_entries.len());
 
     for entry in component_entries {
+        status_updater
+            .send(StateUpdateMessage::ShellyComponentFound {
+                id: result.id,
+                endpoint: addr,
+                component: entry.clone(),
+            })
+            .await
+            .map_err(enrich_error(addr))?;
         match entry {
             ComponentEntry::Input(_) => {}
             ComponentEntry::Ble(_) => {}

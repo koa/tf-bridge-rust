@@ -20,7 +20,7 @@ pub struct Configuration {
     pub id: u16,
     pub name: Option<Box<str>>,
 }
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Copy, Hash, Eq, Ord, PartialOrd)]
 pub struct InputKey {
     pub id: u16,
 }

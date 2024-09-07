@@ -1,7 +1,7 @@
 use crate::serde::SerializableMacAddress;
 use chrono::{DateTime, Duration, Utc};
 use semver::Version;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_with::{formats::Flexible, serde_as, DurationSeconds, TimestampSeconds};
 
 #[derive(Deserialize, Debug, Clone, PartialEq)]
@@ -118,7 +118,7 @@ pub enum DeviceAddonType {
     Sensor,
     Prooutput,
 }
-#[derive(Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Copy, Hash, Eq, Ord, PartialOrd)]
 pub enum Key {
     #[serde(rename = "sys")]
     Sys,

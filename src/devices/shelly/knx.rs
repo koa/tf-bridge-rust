@@ -1,4 +1,4 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 
 #[derive(Deserialize, Debug, Clone, PartialEq)]
@@ -20,7 +20,7 @@ pub struct KnxRouting {
     pub addr: SocketAddr,
 }
 
-#[derive(Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Copy, Hash, Eq, Ord, PartialOrd)]
 pub enum Key {
     #[serde(rename = "knx")]
     Knx,

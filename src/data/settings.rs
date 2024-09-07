@@ -84,6 +84,7 @@ pub struct GoogleSheet {
     motion_detectors: GoogleMotionDetectors,
     relays: GoogleRelay,
     available_bricklets: GoogleAvailableBricklets,
+    available_shelly_components: GoogleAvailableShellyComponents,
 }
 
 #[derive(Deserialize, Debug)]
@@ -216,6 +217,14 @@ pub struct GoogleAvailableBricklets {
     connection_failed_counters: Box<str>,
     errors: Box<str>,
 }
+#[derive(Deserialize, Debug)]
+pub struct GoogleAvailableShellyComponents {
+    sheet: Box<str>,
+    range: Box<str>,
+    device: Box<str>,
+    address: Box<str>,
+    component_type: Box<str>,
+}
 
 #[derive(Error, Debug)]
 pub enum GoogleError {
@@ -286,8 +295,16 @@ impl GoogleSheet {
         &self.available_bricklets
     }
 
-    pub fn timestamp_format(&self) -> &Box<str> {
+    pub fn timestamp_format(&self) -> &str {
         &self.timestamp_format
+    }
+
+    pub fn light_shelly(&self) -> Option<&GoogleLightData<ShellyLightAddress>> {
+        self.light_shelly.as_ref()
+    }
+
+    pub fn available_shelly_components(&self) -> &GoogleAvailableShellyComponents {
+        &self.available_shelly_components
     }
 }
 
@@ -585,12 +602,33 @@ impl GoogleAvailableBricklets {
     pub fn relays(&self) -> &str {
         &self.relays
     }
-    pub fn connection_failed_counters(&self) -> &Box<str> {
+    pub fn connection_failed_counters(&self) -> &str {
         &self.connection_failed_counters
     }
 
-    pub fn errors(&self) -> &Box<str> {
+    pub fn errors(&self) -> &str {
         &self.errors
+    }
+}
+impl GoogleAvailableShellyComponents {
+    pub fn sheet(&self) -> &str {
+        &self.sheet
+    }
+
+    pub fn range(&self) -> &str {
+        &self.range
+    }
+
+    pub fn device(&self) -> &str {
+        &self.device
+    }
+
+    pub fn address(&self) -> &str {
+        &self.address
+    }
+
+    pub fn component_type(&self) -> &str {
+        &self.component_type
     }
 }
 

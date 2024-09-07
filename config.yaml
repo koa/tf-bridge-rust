@@ -120,7 +120,7 @@ google-sheet:
     ring_button: Taster
     state: Status Dev
   available_bricklets:
-    sheet: Verfügbare Geräte Dev
+    sheet: Verfügbare Bricklets Dev
     range: A:O
     endpoint: Endpoint
     master_id: Master Brick
@@ -137,3 +137,9 @@ google-sheet:
     relays: Relays
     connection_failed_counters: Unterbrüche
     errors: Fehler
+  available_shelly_components:
+    sheet: Verfügbare Shelly Komponenten Dev
+    range: A:C
+    device: Gerät
+    address: Adresse
+    component_type: Typ

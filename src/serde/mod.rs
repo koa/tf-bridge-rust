@@ -1,6 +1,6 @@
 use macaddr::MacAddr6;
 use serde::de::{Error, Visitor};
-use serde::{Deserialize, Deserializer};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::cmp::Ordering;
 use std::fmt::{Display, Formatter, Write};
 use std::marker::PhantomData;
@@ -93,6 +93,14 @@ impl<'de, K: PrefixedKey> Deserialize<'de> for SerdeStringKey<K> {
         D: Deserializer<'de>,
     {
         deserializer.deserialize_str(KeyVisitor(PhantomData::<K>::default()))
+    }
+}
+impl<K: PrefixedKey> Serialize for SerdeStringKey<K> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&self.to_string())
     }
 }
 

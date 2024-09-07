@@ -5,6 +5,8 @@ use std::{
     time::SystemTime,
 };
 
+use crate::devices::shelly::common::DeviceId;
+use crate::devices::shelly::shelly::ComponentEntry;
 use tinkerforge_async::DeviceIdentifier;
 use tinkerforge_async::{base58::Uid, ip_connection::Version};
 
@@ -12,9 +14,10 @@ use tinkerforge_async::{base58::Uid, ip_connection::Version};
 pub struct State {
     endpoints: HashMap<IpAddr, ConnectionData>,
     bricklets: HashMap<Uid, BrickletConnectionData>,
+    shelly_components: HashMap<IpAddr, (DeviceId, Vec<ComponentEntry>)>,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub enum StateUpdateMessage {
     EndpointConnected(IpAddr),
     EndpointDisconnected(IpAddr),
@@ -34,8 +37,13 @@ pub enum StateUpdateMessage {
         port: Option<char>,
         counters: SpitfpErrorCounters,
     },
-    CommunicationFailed {
+    BrickletCommunicationFailed {
         uid: Uid,
+    },
+    ShellyComponentFound {
+        id: DeviceId,
+        endpoint: IpAddr,
+        component: ComponentEntry,
     },
 }
 
@@ -109,6 +117,7 @@ impl State {
                 }
             },
             StateUpdateMessage::EndpointDisconnected(ip) => {
+                //self.shelly_components.remove(&ip).is_some() ||
                 if let Some(entry) = self.endpoints.get_mut(&ip) {
                     if entry.state != ConnectionState::Disconnected {
                         entry.state = ConnectionState::Disconnected;
@@ -197,7 +206,7 @@ impl State {
                     false
                 }
             }
-            StateUpdateMessage::CommunicationFailed { uid } => {
+            StateUpdateMessage::BrickletCommunicationFailed { uid } => {
                 if let Some(entry_data) = self.bricklets.get_mut(&uid) {
                     entry_data.connection_failed_counter += 1;
                     true
@@ -205,6 +214,32 @@ impl State {
                     false
                 }
             }
+            StateUpdateMessage::ShellyComponentFound {
+                id,
+                endpoint,
+                component,
+            } => match self.shelly_components.entry(endpoint) {
+                Entry::Occupied(mut entry) => {
+                    let (entry_id, components) = entry.get_mut();
+                    let key_modified = if *entry_id == id {
+                        false
+                    } else {
+                        *entry_id = id;
+                        true
+                    };
+                    key_modified
+                        || if components.contains(&component) {
+                            false
+                        } else {
+                            components.push(component);
+                            true
+                        }
+                }
+                Entry::Vacant(new_entry) => {
+                    new_entry.insert((id, vec![component]));
+                    true
+                }
+            },
         }
     }
     pub fn endpoint(&self, ip: &IpAddr) -> Option<&ConnectionData> {
@@ -215,6 +250,10 @@ impl State {
     }
     pub fn bricklets(&self) -> &HashMap<Uid, BrickletConnectionData> {
         &self.bricklets
+    }
+
+    pub fn shelly_components(&self) -> &HashMap<IpAddr, (DeviceId, Vec<ComponentEntry>)> {
+        &self.shelly_components
     }
 }
 

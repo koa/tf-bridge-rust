@@ -1,3 +1,17 @@
+use crate::shelly::common::DeviceId;
+use crate::shelly::shelly::ComponentEntry;
+use chrono::{format::StrftimeItems, DateTime, Local};
+use google_sheets4::{
+    api::{BatchUpdateValuesRequest, CellData, SpreadsheetMethods, ValueRange},
+    hyper::{client::HttpConnector, Client},
+    hyper_rustls::{self, HttpsConnector},
+    oauth2::ServiceAccountAuthenticator,
+    Sheets,
+};
+use log::{debug, error, info};
+use serde::Deserialize;
+use serde_json::Value;
+use std::iter::Map;
 use std::{
     array,
     borrow::Cow,
@@ -9,20 +23,10 @@ use std::{
     time::{Duration, SystemTime},
     vec::IntoIter,
 };
-
-use chrono::{format::StrftimeItems, DateTime, Local};
-use google_sheets4::{
-    api::{BatchUpdateValuesRequest, CellData, SpreadsheetMethods, ValueRange},
-    hyper::{client::HttpConnector, Client},
-    hyper_rustls::{self, HttpsConnector},
-    oauth2::ServiceAccountAuthenticator,
-    Sheets,
-};
-use log::{debug, error, info};
-use serde::Deserialize;
 use thiserror::Error;
 use tinkerforge_async::{base58::Uid, ip_connection::Version, DeviceIdentifier};
 
+use crate::devices::shelly::shelly::{ComponentAddress, ComponentKey};
 use crate::{
     data::{
         registry::{
@@ -123,7 +127,7 @@ pub async fn read_sheet_data(state: Option<&State>) -> Result<Option<Wiring>, Go
         builder.parse_lights(&context).await?;
         builder.parse_relays(&context).await?;
 
-        builder.update_available_devices(&context).await?;
+        builder.update_available_bricklets(&context).await?;
 
         builder.write_updates_to_sheet(&context).await?;
 
@@ -168,249 +172,300 @@ enum Connection {
 }
 
 impl GoogleSheetWireBuilder {
-    async fn update_available_devices<'a>(
+    async fn update_available_bricklets<'a>(
         &'a mut self,
         context: &'a ParserContext<'a>,
     ) -> Result<(), GoogleDataError> {
         if let Some(state) = context.state {
-            info!("Update available bricklets");
-            let config = context.config.available_bricklets();
-            let mut output_table = GoogleTable::connect(
-                &context.spreadsheet_methods,
-                [
-                    config.endpoint(),
-                    config.master_id(),
-                    config.connector(),
-                    config.uid(),
-                    config.device_type(),
-                    config.hardware_version(),
-                    config.firmware_version(),
-                    config.io_ports(),
-                    config.temp_sensor(),
-                    config.motion_detectors(),
-                    config.display(),
-                    config.dmx_channels(),
-                    config.relays(),
-                    config.connection_failed_counters(),
-                    config.errors(),
-                ],
-                [],
-                context.config.spreadsheet_id(),
-                config.sheet(),
-                config.range(),
-            )
-            .await?;
-            #[derive(Eq, PartialEq)]
-            struct BrickletRow<'a> {
-                endpoint_addr: IpAddr,
-                master_idx: Option<u8>,
-                connector: char,
-                uid: Uid,
-                device_type: DeviceIdentifier,
-                hardware_version: Version,
-                firmware_version: Version,
-                state: ConnectionState,
-                last_change: SystemTime,
-                connection_failed_counter: u32,
-                error_counters: &'a HashMap<Option<char>, SpitfpErrorCounters>,
-            }
-            let master_positions = state
-                .bricklets()
-                .iter()
-                .filter_map(|(uid, BrickletConnectionData { metadata, .. })| {
-                    metadata.as_ref().and_then(
-                        |BrickletMetadata {
-                             position,
-                             device_identifier,
-                             connected_uid,
-                             ..
-                         }| {
-                            match *device_identifier {
-                                DeviceIdentifier::MasterBrick => Some((
-                                    *uid,
-                                    Connection::Master {
-                                        position: *position as u8 - b'0',
-                                    },
-                                )),
-                                DeviceIdentifier::IsolatorBricklet => Some((
-                                    *uid,
-                                    Connection::Isolator {
-                                        parent: *connected_uid,
-                                        position: *position,
-                                    },
-                                )),
-                                _ => None,
-                            }
-                        },
+            {
+                info!("Update available shelly components");
+                let config = context.config.available_shelly_components();
+                let mut shelly_devices: Box<[_]> = state.shelly_components().iter().collect();
+                shelly_devices.sort_by_key(|(key, _)| *key);
+                Self::override_table(
+                    &mut self.updates,
+                    GoogleTable::connect(
+                        &context.spreadsheet_methods,
+                        [config.device(), config.address(), config.component_type()],
+                        [],
+                        context.config.spreadsheet_id(),
+                        config.sheet(),
+                        config.range(),
                     )
-                })
-                .collect::<HashMap<_, _>>();
-
-            let mut rows = state
-                .bricklets()
-                .iter()
-                .filter_map(
-                    |(
-                        uid,
-                        BrickletConnectionData {
-                            state,
-                            last_change,
-                            endpoint,
-                            metadata,
-                            connection_failed_counter,
-                            error_counters,
-                            session: _,
-                        },
-                    )| {
-                        if state != &ConnectionState::Connected {
-                            return None;
-                        }
-                        metadata.as_ref().map(
+                    .await?,
+                    shelly_devices
+                        .iter()
+                        .flat_map(|(ip, (device_id, components))| {
+                            let mut components: Box<[_]> = components.iter().collect();
+                            components.sort_by_key(|e| e.key());
+                            let rows: Vec<[Value; 3]> = components
+                                .iter()
+                                .map(|component| {
+                                    [
+                                        device_id.to_string().into(),
+                                        ComponentAddress {
+                                            device: *device_id,
+                                            key: component.key(),
+                                        }
+                                        .to_string()
+                                        .into(),
+                                        component.type_name().into(),
+                                    ]
+                                })
+                                .collect();
+                            rows.into_iter()
+                        }),
+                );
+            }
+            {
+                info!("Update available bricklets");
+                let config = context.config.available_bricklets();
+                let mut output_table = GoogleTable::connect(
+                    &context.spreadsheet_methods,
+                    [
+                        config.endpoint(),
+                        config.master_id(),
+                        config.connector(),
+                        config.uid(),
+                        config.device_type(),
+                        config.hardware_version(),
+                        config.firmware_version(),
+                        config.io_ports(),
+                        config.temp_sensor(),
+                        config.motion_detectors(),
+                        config.display(),
+                        config.dmx_channels(),
+                        config.relays(),
+                        config.connection_failed_counters(),
+                        config.errors(),
+                    ],
+                    [],
+                    context.config.spreadsheet_id(),
+                    config.sheet(),
+                    config.range(),
+                )
+                .await?;
+                #[derive(Eq, PartialEq)]
+                struct BrickletRow<'a> {
+                    endpoint_addr: IpAddr,
+                    master_idx: Option<u8>,
+                    connector: char,
+                    uid: Uid,
+                    device_type: DeviceIdentifier,
+                    hardware_version: Version,
+                    firmware_version: Version,
+                    state: ConnectionState,
+                    last_change: SystemTime,
+                    connection_failed_counter: u32,
+                    error_counters: &'a HashMap<Option<char>, SpitfpErrorCounters>,
+                }
+                let master_positions = state
+                    .bricklets()
+                    .iter()
+                    .filter_map(|(uid, BrickletConnectionData { metadata, .. })| {
+                        metadata.as_ref().and_then(
                             |BrickletMetadata {
-                                 connected_uid,
                                  position,
-                                 hardware_version,
-                                 firmware_version,
                                  device_identifier,
+                                 connected_uid,
+                                 ..
                              }| {
-                                let (master_idx, connector) = Self::find_connection(
-                                    &master_positions,
-                                    *connected_uid,
-                                    *position,
-                                );
-                                BrickletRow {
-                                    endpoint_addr: *endpoint,
-                                    master_idx,
-                                    connector,
-                                    uid: *uid,
-                                    device_type: *device_identifier,
-                                    hardware_version: *hardware_version,
-                                    firmware_version: *firmware_version,
-                                    state: *state,
-                                    last_change: *last_change,
-                                    connection_failed_counter: *connection_failed_counter,
-                                    error_counters,
+                                match *device_identifier {
+                                    DeviceIdentifier::MasterBrick => Some((
+                                        *uid,
+                                        Connection::Master {
+                                            position: *position as u8 - b'0',
+                                        },
+                                    )),
+                                    DeviceIdentifier::IsolatorBricklet => Some((
+                                        *uid,
+                                        Connection::Isolator {
+                                            parent: *connected_uid,
+                                            position: *position,
+                                        },
+                                    )),
+                                    _ => None,
                                 }
                             },
                         )
-                    },
-                )
-                .collect::<Vec<_>>();
-            rows.sort_by(|r1, r2| {
-                r1.endpoint_addr
-                    .cmp(&r2.endpoint_addr)
-                    .then(r1.master_idx.cmp(&r2.master_idx))
-                    .then(r1.connector.cmp(&r2.connector))
-                    .then(r1.device_type.cmp(&r2.device_type))
-                    .then(r1.uid.cmp(&r2.uid))
-            });
+                    })
+                    .collect::<HashMap<_, _>>();
 
-            let rows = rows.into_iter().map(|row| {
-                let io_count: Option<u16> = self.io_bricklets.get(&row.uid).map(|v| {
-                    v.iter()
-                        .map(|s| match s {
-                            ButtonSetting::Dual { .. } => 2,
-                            ButtonSetting::Single { .. } => 1,
-                        })
-                        .sum()
+                let mut rows = state
+                    .bricklets()
+                    .iter()
+                    .filter_map(
+                        |(
+                            uid,
+                            BrickletConnectionData {
+                                state,
+                                last_change,
+                                endpoint,
+                                metadata,
+                                connection_failed_counter,
+                                error_counters,
+                                session: _,
+                            },
+                        )| {
+                            if state != &ConnectionState::Connected {
+                                return None;
+                            }
+                            metadata.as_ref().map(
+                                |BrickletMetadata {
+                                     connected_uid,
+                                     position,
+                                     hardware_version,
+                                     firmware_version,
+                                     device_identifier,
+                                 }| {
+                                    let (master_idx, connector) = Self::find_connection(
+                                        &master_positions,
+                                        *connected_uid,
+                                        *position,
+                                    );
+                                    BrickletRow {
+                                        endpoint_addr: *endpoint,
+                                        master_idx,
+                                        connector,
+                                        uid: *uid,
+                                        device_type: *device_identifier,
+                                        hardware_version: *hardware_version,
+                                        firmware_version: *firmware_version,
+                                        state: *state,
+                                        last_change: *last_change,
+                                        connection_failed_counter: *connection_failed_counter,
+                                        error_counters,
+                                    }
+                                },
+                            )
+                        },
+                    )
+                    .collect::<Vec<_>>();
+                rows.sort_by(|r1, r2| {
+                    r1.endpoint_addr
+                        .cmp(&r2.endpoint_addr)
+                        .then(r1.master_idx.cmp(&r2.master_idx))
+                        .then(r1.connector.cmp(&r2.connector))
+                        .then(r1.device_type.cmp(&r2.device_type))
+                        .then(r1.uid.cmp(&r2.uid))
                 });
-                let temperature_sensor = self.temperature_sensors.contains_key(&row.uid);
-                let motion_detector = self.motion_detector_sensors.contains_key(&row.uid);
-                let lcd_screen = self.lcd_screens.contains_key(&row.uid);
-                let dmx_count: Option<u16> = self.dmx_bricklets.get(&row.uid).map(|v| {
-                    v.iter()
-                        .map(|s| match s {
-                            DmxConfigEntry::Dimm { .. } => 1,
-                            DmxConfigEntry::DimmWhitebalance { .. } => 2,
-                            DmxConfigEntry::Switch { .. } => 1,
-                        })
-                        .sum()
-                });
-                let mut error_description = String::new();
-                for (connection, counters) in row.error_counters {
-                    if counters.error_count_message_checksum > 0 {
-                        Self::append_counter(
-                            &mut error_description,
-                            *connection,
-                            "msg",
-                            counters.error_count_message_checksum,
-                        );
-                    }
-                    if counters.error_count_ack_checksum > 0 {
-                        Self::append_counter(
-                            &mut error_description,
-                            *connection,
-                            "ack",
-                            counters.error_count_ack_checksum,
-                        );
-                    }
-                    if counters.error_count_overflow > 0 {
-                        Self::append_counter(
-                            &mut error_description,
-                            *connection,
-                            "overflow",
-                            counters.error_count_overflow,
-                        );
-                    }
-                    if counters.error_count_frame > 0 {
-                        Self::append_counter(
-                            &mut error_description,
-                            *connection,
-                            "frame",
-                            counters.error_count_frame,
-                        );
-                    }
-                }
-                let relay_count = self.relays.get(&row.uid).map(|rs| rs.entries.len());
-                [
-                    (&**self
-                        .endpoint_names
-                        .get(&row.endpoint_addr)
-                        .map(Cow::Borrowed)
-                        .unwrap_or_else(|| {
-                            Cow::Owned(row.endpoint_addr.to_string().into_boxed_str())
-                        })
-                        .as_ref())
-                        .into(),
-                    row.master_idx.unwrap_or_default().into(),
-                    row.connector.to_string().into(),
-                    row.uid.to_string().into(),
-                    identify_device_type(row.device_type),
-                    row.hardware_version.to_string().into(),
-                    row.firmware_version.to_string().into(),
-                    io_count.into(),
-                    show_bool(temperature_sensor),
-                    show_bool(motion_detector),
-                    show_bool(lcd_screen),
-                    dmx_count.into(),
-                    relay_count.into(),
-                    row.connection_failed_counter.into(),
-                    error_description.into(),
-                ]
-            });
-            for data_row in rows {
-                if let Some((table_row, _)) = output_table.next() {
-                    for (cell, value) in table_row.iter().zip(data_row.into_iter()) {
-                        if Some(&value)
-                            .filter(|value| !value.is_null() && value.as_str() != Some(""))
-                            != cell.get_value().as_ref()
-                        {
-                            debug!(
-                                "Update {}: {:?}->{:?}",
-                                cell.coordinates,
-                                cell.get_value().as_ref(),
-                                value
+
+                let rows = rows.into_iter().map(|row| {
+                    let io_count: Option<u16> = self.io_bricklets.get(&row.uid).map(|v| {
+                        v.iter()
+                            .map(|s| match s {
+                                ButtonSetting::Dual { .. } => 2,
+                                ButtonSetting::Single { .. } => 1,
+                            })
+                            .sum()
+                    });
+                    let temperature_sensor = self.temperature_sensors.contains_key(&row.uid);
+                    let motion_detector = self.motion_detector_sensors.contains_key(&row.uid);
+                    let lcd_screen = self.lcd_screens.contains_key(&row.uid);
+                    let dmx_count: Option<u16> = self.dmx_bricklets.get(&row.uid).map(|v| {
+                        v.iter()
+                            .map(|s| match s {
+                                DmxConfigEntry::Dimm { .. } => 1,
+                                DmxConfigEntry::DimmWhitebalance { .. } => 2,
+                                DmxConfigEntry::Switch { .. } => 1,
+                            })
+                            .sum()
+                    });
+                    let mut error_description = String::new();
+                    for (connection, counters) in row.error_counters {
+                        if counters.error_count_message_checksum > 0 {
+                            Self::append_counter(
+                                &mut error_description,
+                                *connection,
+                                "msg",
+                                counters.error_count_message_checksum,
                             );
-                            self.updates.push(cell.override_cell(value));
+                        }
+                        if counters.error_count_ack_checksum > 0 {
+                            Self::append_counter(
+                                &mut error_description,
+                                *connection,
+                                "ack",
+                                counters.error_count_ack_checksum,
+                            );
+                        }
+                        if counters.error_count_overflow > 0 {
+                            Self::append_counter(
+                                &mut error_description,
+                                *connection,
+                                "overflow",
+                                counters.error_count_overflow,
+                            );
+                        }
+                        if counters.error_count_frame > 0 {
+                            Self::append_counter(
+                                &mut error_description,
+                                *connection,
+                                "frame",
+                                counters.error_count_frame,
+                            );
                         }
                     }
-                } else {
-                    output_table.append_row((data_row, []), |v| self.updates.push(v));
-                }
+                    let relay_count = self.relays.get(&row.uid).map(|rs| rs.entries.len());
+                    [
+                        (&**self
+                            .endpoint_names
+                            .get(&row.endpoint_addr)
+                            .map(Cow::Borrowed)
+                            .unwrap_or_else(|| {
+                                Cow::Owned(row.endpoint_addr.to_string().into_boxed_str())
+                            })
+                            .as_ref())
+                            .into(),
+                        row.master_idx.unwrap_or_default().into(),
+                        row.connector.to_string().into(),
+                        row.uid.to_string().into(),
+                        identify_device_type(row.device_type),
+                        row.hardware_version.to_string().into(),
+                        row.firmware_version.to_string().into(),
+                        io_count.into(),
+                        show_bool(temperature_sensor),
+                        show_bool(motion_detector),
+                        show_bool(lcd_screen),
+                        dmx_count.into(),
+                        relay_count.into(),
+                        row.connection_failed_counter.into(),
+                        error_description.into(),
+                    ]
+                });
+                Self::override_table(&mut self.updates, output_table, rows);
             }
-            output_table.clean_remaining_rows(|v| self.updates.push(v));
         }
         Ok(())
+    }
+
+    fn override_table<const N: usize, I>(
+        updates: &mut Vec<ValueRange>,
+        mut output_table: GoogleTable<N, 0>,
+        rows: I,
+    ) where
+        I: Iterator<Item = [Value; N]>,
+    {
+        for data_row in rows {
+            if let Some((table_row, _)) = output_table.next() {
+                for (cell, value) in table_row.iter().zip(data_row.into_iter()) {
+                    if Some(&value).filter(|value| !value.is_null() && value.as_str() != Some(""))
+                        != cell.get_value().as_ref()
+                    {
+                        debug!(
+                            "Update {}: {:?}->{:?}",
+                            cell.coordinates,
+                            cell.get_value().as_ref(),
+                            value
+                        );
+                        updates.push(cell.override_cell(value));
+                    }
+                }
+            } else {
+                output_table.append_row((data_row, []), |v| updates.push(v));
+            }
+        }
+        output_table.clean_remaining_rows(|v| updates.push(v));
     }
 
     fn append_counter(

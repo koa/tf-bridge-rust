@@ -1,3 +1,4 @@
+use jsonrpsee::core::Serialize;
 use serde::Deserialize;
 
 #[derive(Deserialize, Debug, Clone, PartialEq)]
@@ -22,7 +23,7 @@ pub struct RpcConfiguration {
 pub struct ObserverConfiguration {
     pub enable: bool,
 }
-#[derive(Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Copy, Hash, Eq, Ord, PartialOrd)]
 pub enum Key {
     #[serde(rename = "ble")]
     BLE,
