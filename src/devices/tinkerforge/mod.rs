@@ -150,7 +150,10 @@ async fn run_enumeration_listener(
         //.merge(ReceiverStream::new(terminated_rx).map(EnumerationListenerEvent::TerminatedClient))
         ;
     status_updater
-        .send(StateUpdateMessage::EndpointConnected(addr.0))
+        .send(StateUpdateMessage::EndpointConnected {
+            address: addr.0,
+            hostname: None,
+        })
         .await?;
     let mut device_testaments = HashMap::new();
     while let Some(event) = stream.next().await {

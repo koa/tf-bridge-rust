@@ -1,5 +1,26 @@
+use crate::devices::shelly::shelly::{ComponentAddress, ComponentKey};
 use crate::shelly::common::DeviceId;
 use crate::shelly::shelly::ComponentEntry;
+use crate::{
+    data::{
+        registry::{
+            BrightnessKey, ClockKey, DualButtonKey, LightColorKey, SingleButtonKey,
+            SwitchOutputKey, TemperatureKey,
+        },
+        settings::{GoogleEndpointData, GoogleError, GoogleSheet, CONFIG},
+        state::{
+            BrickletConnectionData, BrickletMetadata, ConnectionState, SpitfpErrorCounters, State,
+        },
+        wiring::{
+            ButtonSetting, Controllers, DmxConfigEntry, DmxSettings, DualInputDimmer,
+            DualInputSwitch, HeatController, IoSettings, MotionDetector, MotionDetectorSettings,
+            Orientation, RelayChannelEntry, RelaySettings, RingController, ScreenSettings,
+            ShellyDevices, TemperatureSettings, TinkerforgeDevices, Wiring,
+        },
+        DeviceInRoom, Room, SubDeviceInRoom,
+    },
+    util::kelvin_2_mireds,
+};
 use chrono::{format::StrftimeItems, DateTime, Local};
 use google_sheets4::{
     api::{BatchUpdateValuesRequest, CellData, SpreadsheetMethods, ValueRange},
@@ -25,28 +46,7 @@ use std::{
 };
 use thiserror::Error;
 use tinkerforge_async::{base58::Uid, ip_connection::Version, DeviceIdentifier};
-
-use crate::devices::shelly::shelly::{ComponentAddress, ComponentKey};
-use crate::{
-    data::{
-        registry::{
-            BrightnessKey, ClockKey, DualButtonKey, LightColorKey, SingleButtonKey,
-            SwitchOutputKey, TemperatureKey,
-        },
-        settings::{GoogleEndpointData, GoogleError, GoogleSheet, CONFIG},
-        state::{
-            BrickletConnectionData, BrickletMetadata, ConnectionState, SpitfpErrorCounters, State,
-        },
-        wiring::{
-            ButtonSetting, Controllers, DmxConfigEntry, DmxSettings, DualInputDimmer,
-            DualInputSwitch, HeatController, IoSettings, MotionDetector, MotionDetectorSettings,
-            Orientation, RelayChannelEntry, RelaySettings, RingController, ScreenSettings,
-            ShellyDevices, TemperatureSettings, TinkerforgeDevices, Wiring,
-        },
-        DeviceInRoom, Room, SubDeviceInRoom,
-    },
-    util::kelvin_2_mireds,
-};
+use url::quirks::host;
 
 #[derive(Error, Debug)]
 pub enum GoogleDataError {
@@ -182,7 +182,7 @@ impl GoogleSheetWireBuilder {
                 let config = context.config.available_shelly_components();
                 let mut shelly_devices: Box<[_]> = state.shelly_components().iter().collect();
                 shelly_devices.sort_by_key(|(key, _)| *key);
-                Self::override_table(
+                override_table(
                     &mut self.updates,
                     GoogleTable::connect(
                         &context.spreadsheet_methods,
@@ -203,12 +203,7 @@ impl GoogleSheetWireBuilder {
                                 .map(|component| {
                                     [
                                         device_id.to_string().into(),
-                                        ComponentAddress {
-                                            device: *device_id,
-                                            key: component.key(),
-                                        }
-                                        .to_string()
-                                        .into(),
+                                        component.key().to_string().into(),
                                         component.type_name().into(),
                                     ]
                                 })
@@ -220,7 +215,7 @@ impl GoogleSheetWireBuilder {
             {
                 info!("Update available bricklets");
                 let config = context.config.available_bricklets();
-                let mut output_table = GoogleTable::connect(
+                let output_table = GoogleTable::connect(
                     &context.spreadsheet_methods,
                     [
                         config.endpoint(),
@@ -433,39 +428,10 @@ impl GoogleSheetWireBuilder {
                         error_description.into(),
                     ]
                 });
-                Self::override_table(&mut self.updates, output_table, rows);
+                override_table(&mut self.updates, output_table, rows);
             }
         }
         Ok(())
-    }
-
-    fn override_table<const N: usize, I>(
-        updates: &mut Vec<ValueRange>,
-        mut output_table: GoogleTable<N, 0>,
-        rows: I,
-    ) where
-        I: Iterator<Item = [Value; N]>,
-    {
-        for data_row in rows {
-            if let Some((table_row, _)) = output_table.next() {
-                for (cell, value) in table_row.iter().zip(data_row.into_iter()) {
-                    if Some(&value).filter(|value| !value.is_null() && value.as_str() != Some(""))
-                        != cell.get_value().as_ref()
-                    {
-                        debug!(
-                            "Update {}: {:?}->{:?}",
-                            cell.coordinates,
-                            cell.get_value().as_ref(),
-                            value
-                        );
-                        updates.push(cell.override_cell(value));
-                    }
-                }
-            } else {
-                output_table.append_row((data_row, []), |v| updates.push(v));
-            }
-        }
-        output_table.clean_remaining_rows(|v| updates.push(v));
     }
 
     fn append_counter(
@@ -563,12 +529,13 @@ impl GoogleSheetWireBuilder {
         endpoints_config: &GoogleEndpointData,
     ) -> Result<Box<[IpAddr]>, GoogleDataError> {
         let mut target_endpoints = Vec::new();
-        for (address, state_cell, place) in GoogleTable::connect(
+        for (address, state_cell, place, hostname_cell) in GoogleTable::connect(
             &context.spreadsheet_methods,
             [
                 endpoints_config.address(),
                 endpoints_config.state(),
                 endpoints_config.place(),
+                endpoints_config.hostname(),
             ],
             [],
             context.config.spreadsheet_id(),
@@ -576,26 +543,42 @@ impl GoogleSheetWireBuilder {
             endpoints_config.range(),
         )
         .await?
-        .filter_map(|([address, state, place], _)| {
+        .filter_map(|([address, state, place, hostname], _)| {
             address
                 .get_content()
                 .map(IpAddr::from_str)
                 .and_then(Result::ok)
-                .map(|ip| (ip, state, place.get_content().unwrap_or_default().into()))
+                .map(|ip| {
+                    (
+                        ip,
+                        state,
+                        place.get_content().unwrap_or_default().into(),
+                        hostname,
+                    )
+                })
         }) {
             target_endpoints.push(address);
             self.endpoint_names.insert(address, place);
-            if let Some(update) = context
+            for update in context
                 .state
                 .and_then(|s| s.endpoint(&address))
                 .map(|data| {
-                    format!(
-                        "{} at {}",
-                        data.state,
-                        DateTime::<Local>::from(data.last_change)
+                    (
+                        format!(
+                            "{} at {}",
+                            data.state,
+                            DateTime::<Local>::from(data.last_change)
+                        ),
+                        data.hostname.as_deref(),
                     )
                 })
-                .and_then(|new_state| state_cell.create_content_update(&new_state))
+                .iter()
+                .flat_map(|(new_state, hostname)| {
+                    hostname
+                        .iter()
+                        .flat_map(|hostname| hostname_cell.create_content_update(hostname))
+                        .chain(state_cell.create_content_update(new_state))
+                })
             {
                 self.updates.push(update);
             }
@@ -1927,6 +1910,34 @@ impl Display for CellCoordinates {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         self.format(f)
     }
+}
+fn override_table<const N: usize, I>(
+    updates: &mut Vec<ValueRange>,
+    mut output_table: GoogleTable<N, 0>,
+    rows: I,
+) where
+    I: Iterator<Item = [Value; N]>,
+{
+    for data_row in rows {
+        if let Some((table_row, _)) = output_table.next() {
+            for (cell, value) in table_row.iter().zip(data_row.into_iter()) {
+                if Some(&value).filter(|value| !value.is_null() && value.as_str() != Some(""))
+                    != cell.get_value().as_ref()
+                {
+                    debug!(
+                        "Update {}: {:?}->{:?}",
+                        cell.coordinates,
+                        cell.get_value().as_ref(),
+                        value
+                    );
+                    updates.push(cell.override_cell(value));
+                }
+            }
+        } else {
+            output_table.append_row((data_row, []), |v| updates.push(v));
+        }
+    }
+    output_table.clean_remaining_rows(|v| updates.push(v));
 }
 
 #[cfg(test)]

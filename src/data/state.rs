@@ -19,7 +19,10 @@ pub struct State {
 
 #[derive(Debug, Clone)]
 pub enum StateUpdateMessage {
-    EndpointConnected(IpAddr),
+    EndpointConnected {
+        address: IpAddr,
+        hostname: Option<Box<str>>,
+    },
     EndpointDisconnected(IpAddr),
     BrickletConnected {
         uid: Uid,
@@ -64,6 +67,7 @@ pub struct ConnectionStateMsg<ID> {
 #[derive(Debug)]
 pub struct ConnectionData {
     pub state: ConnectionState,
+    pub hostname: Option<Box<str>>,
     pub last_change: SystemTime,
 }
 
@@ -96,26 +100,30 @@ pub enum ConnectionState {
 impl State {
     pub fn process_msg(&mut self, msg: StateUpdateMessage) -> bool {
         match msg {
-            StateUpdateMessage::EndpointConnected(ip) => match self.endpoints.entry(ip) {
-                Entry::Occupied(mut entry) => {
-                    if entry.get().state != ConnectionState::Connected {
-                        entry.insert(ConnectionData {
+            StateUpdateMessage::EndpointConnected { address, hostname } => {
+                match self.endpoints.entry(address) {
+                    Entry::Occupied(mut entry) => {
+                        if entry.get().state != ConnectionState::Connected {
+                            entry.insert(ConnectionData {
+                                state: ConnectionState::Connected,
+                                hostname,
+                                last_change: SystemTime::now(),
+                            });
+                            true
+                        } else {
+                            false
+                        }
+                    }
+                    Entry::Vacant(new_entry) => {
+                        new_entry.insert(ConnectionData {
                             state: ConnectionState::Connected,
+                            hostname,
                             last_change: SystemTime::now(),
                         });
                         true
-                    } else {
-                        false
                     }
                 }
-                Entry::Vacant(new_entry) => {
-                    new_entry.insert(ConnectionData {
-                        state: ConnectionState::Connected,
-                        last_change: SystemTime::now(),
-                    });
-                    true
-                }
-            },
+            }
             StateUpdateMessage::EndpointDisconnected(ip) => {
                 //self.shelly_components.remove(&ip).is_some() ||
                 if let Some(entry) = self.endpoints.get_mut(&ip) {

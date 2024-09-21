@@ -166,7 +166,10 @@ async fn run_enumeration_listener(
     info!("Device Info at {addr}: {result:#?}");
 
     status_updater
-        .send(StateUpdateMessage::EndpointConnected(addr))
+        .send(StateUpdateMessage::EndpointConnected {
+            address: addr,
+            hostname: Some(result.id.to_string().into_boxed_str()),
+        })
         .await
         .map_err(enrich_error(addr))?;
     let mut offset = 0;

@@ -94,6 +94,7 @@ pub struct GoogleEndpointData {
     address: Box<str>,
     state: Box<str>,
     place: Box<str>,
+    hostname: Box<str>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -322,8 +323,12 @@ impl GoogleEndpointData {
         &self.state
     }
 
-    pub fn place(&self) -> &Box<str> {
+    pub fn place(&self) -> &str {
         &self.place
+    }
+
+    pub fn hostname(&self) -> &str {
+        &self.hostname
     }
 }
 

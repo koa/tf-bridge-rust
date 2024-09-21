@@ -17,12 +17,14 @@ google-sheet:
     address: IP-Address
     state: Status Dev
     place: Place
+    hostname: Hostname
   shelly_endpoints:
     sheet: Shelly Endpoints
     range: A:F
     address: IP-Address
     state: Status Dev
     place: Place
+    hostname: Hostname
   light_templates:
     sheet: Templates
     range: A:D

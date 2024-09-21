@@ -136,8 +136,12 @@ async fn config_update_loop(
                 state_received = true;
                 if known_state.process_msg(update.clone()) {
                     match &update {
-                        StateUpdateMessage::EndpointConnected(ip) => {
-                            info!("Endpoint {ip} connected");
+                        StateUpdateMessage::EndpointConnected { address, hostname } => {
+                            if let Some(name) = hostname {
+                                info!("Endpoint {address} connected at {name}");
+                            } else {
+                                info!("Endpoint {address} connected");
+                            }
                         }
                         StateUpdateMessage::EndpointDisconnected(ip) => {
                             info!("Endpoint {ip} disconnected");
