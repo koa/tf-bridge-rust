@@ -1,5 +1,6 @@
 use chrono::{DateTime, Duration, Utc};
 use jsonrpsee::core::client::{Client, Error};
+use jsonrpsee::core::Serialize;
 use serde::Deserialize;
 use serde_with::{formats::Flexible, serde_as, DurationSeconds, TimestampSeconds};
 
@@ -43,11 +44,16 @@ pub struct Status {
     pub errors: Option<Box<[StatusError]>>,
     pub flags: Box<[StatusFlags]>,
 }
-#[serde_as]
-#[derive(Deserialize, Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, PartialOrd)]
 pub struct Configuration {
     pub id: u16,
     pub name: Option<Box<str>>,
+    #[serde(flatten)]
+    pub settings: Settings,
+}
+#[serde_as]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, PartialOrd)]
+pub struct Settings {
     pub in_mode: Option<InputMode>,
     pub initial_state: InitialState,
     pub auto_on: bool,
@@ -68,6 +74,34 @@ pub struct Configuration {
     pub undervoltage_limit: Option<u16>,
     pub current_limit: Option<f32>,
 }
+impl Default for Settings {
+    fn default() -> Self {
+        Self {
+            in_mode: None,
+            initial_state: InitialState::Off,
+            auto_on: false,
+            auto_on_delay: Default::default(),
+            auto_off: false,
+            auto_off_delay: Default::default(),
+            transition_duration: Default::default(),
+            min_brightness_on_toggle: 0.0,
+            night_mode: NightMode {
+                enable: false,
+                brightness: 0.0,
+                active_between: Box::new([]),
+            },
+            button_fade_rate: 0,
+            button_presets: ButtonPresets {
+                button_doublepush: None,
+            },
+            range_map: None,
+            power_limit: None,
+            voltage_limit: None,
+            undervoltage_limit: None,
+            current_limit: None,
+        }
+    }
+}
 #[derive(Deserialize, Debug, Clone, PartialEq)]
 pub struct StatusTransition {}
 
@@ -80,7 +114,7 @@ pub enum StatusFlags {
     #[serde(rename = "uncalibrated")]
     Uncalibrated,
 }
-#[derive(Deserialize, Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, PartialOrd)]
 pub struct NightMode {
     pub enable: bool,
     pub brightness: f32,

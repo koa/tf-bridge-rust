@@ -137,7 +137,7 @@ pub struct TinkerforgeLightAddress {
 #[derive(Deserialize, Debug)]
 pub struct ShellyLightAddress {
     device_name: Box<str>,
-    start_idx: Box<str>,
+    connector: Box<str>,
 }
 
 #[derive(Deserialize, Debug)]
@@ -402,8 +402,8 @@ impl GoogleLightData<ShellyLightAddress> {
     pub fn device_name(&self) -> &str {
         &self.address.device_name
     }
-    pub fn start_idx(&self) -> &str {
-        &self.address.start_idx
+    pub fn shelly_connector(&self) -> &str {
+        &self.address.connector
     }
 }
 

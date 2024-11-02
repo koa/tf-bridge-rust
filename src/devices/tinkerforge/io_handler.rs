@@ -372,7 +372,7 @@ mod test {
     #[test]
     fn test_byte_mask() {
         assert_eq!(
-            vec![IoMessage::Press(0)],
+            vec![IoMessage::Release(0)],
             Iterator::collect::<Vec<_>>(ByteMaskIterator {
                 value: 0b00000001,
                 mask: 0b00000001,
@@ -391,7 +391,7 @@ mod test {
                 IoMessage::Press(15),
             ],
             Iterator::collect::<Vec<_>>(ByteMaskIterator {
-                value: 0b10101010,
+                value: 0b01010101,
                 mask: 0b11111111,
                 index: 8,
             })

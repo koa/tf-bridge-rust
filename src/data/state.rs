@@ -1,3 +1,4 @@
+use crate::shelly::shelly::ComponentEntry;
 use std::{
     collections::{hash_map::Entry, HashMap},
     fmt::{Display, Formatter},
@@ -6,7 +7,6 @@ use std::{
 };
 
 use crate::devices::shelly::common::DeviceId;
-use crate::devices::shelly::shelly::ComponentEntry;
 use tinkerforge_async::DeviceIdentifier;
 use tinkerforge_async::{base58::Uid, ip_connection::Version};
 

@@ -43,11 +43,16 @@ pub struct Status {
     pub temperature: Option<Temperature>,
     pub errors: Option<Box<[StatusError]>>,
 }
-#[serde_as]
-#[derive(Deserialize, Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, PartialOrd)]
 pub struct Configuration {
     pub id: u16,
     pub name: Option<Box<str>>,
+    #[serde(flatten)]
+    pub settings: Settings,
+}
+#[serde_as]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, PartialOrd)]
+pub struct Settings {
     pub in_mode: Option<InputMode>,
     pub initial_state: InitialState,
     pub auto_on: bool,

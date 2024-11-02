@@ -9,7 +9,6 @@ use jsonrpsee::{
     },
 };
 use log::{error, info};
-use std::ops::Deref;
 use std::{
     fmt::{Display, Formatter},
     net::IpAddr,
@@ -27,21 +26,21 @@ use crate::{
     terminator::{TestamentReceiver, TestamentSender},
 };
 
-mod ble;
-mod bthome;
-mod cloud;
+pub mod ble;
+pub mod bthome;
+pub mod cloud;
 pub mod common;
-mod eth;
-mod input;
-mod knx;
-mod light;
-mod mqtt;
+pub mod eth;
+pub mod input;
+pub mod knx;
+pub mod light;
+pub mod mqtt;
 pub mod shelly;
-mod switch;
-mod sys;
-mod ui;
-mod wifi;
-mod ws;
+pub mod switch;
+pub mod sys;
+pub mod ui;
+pub mod wifi;
+pub mod ws;
 
 pub fn activate_devices(
     shelly: &Shelly,

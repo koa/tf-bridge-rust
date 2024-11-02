@@ -1,4 +1,3 @@
-use crate::devices::shelly::{light, switch};
 use chrono::{DateTime, Utc};
 use jsonrpsee::core::Serialize;
 use macaddr::MacAddr6;
@@ -13,7 +12,9 @@ use std::{
     fmt::{Debug, Formatter},
     str::FromStr,
 };
-
+use thiserror::Error;
+#[cfg(test)]
+mod test;
 #[derive(Deserialize, Serialize, Debug, Clone, PartialEq)]
 pub enum LastCommandSource {
     #[serde(rename = "init")]
@@ -75,7 +76,7 @@ pub enum StatusError {
     CalibrationAbortUnsupportedLoad,
 }
 
-#[derive(Deserialize, Serialize, Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Ord, PartialOrd)]
 pub enum InputMode {
     #[serde(rename = "follow")]
     Follow,
@@ -95,7 +96,7 @@ pub enum InputMode {
     Cycle,
 }
 
-#[derive(Deserialize, Serialize, Debug, Clone, PartialEq)]
+#[derive(Debug, Copy, Clone, Serialize, Deserialize, PartialEq, Eq, Ord, PartialOrd)]
 #[serde(rename = "snake_case")]
 pub enum InitialState {
     #[serde(rename = "on")]
@@ -108,28 +109,17 @@ pub enum InitialState {
     MatchInput,
 }
 
-#[derive(Deserialize, Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, PartialOrd)]
 pub struct ButtonPresets {
     pub button_doublepush: Option<ButtonDoublePush>,
 }
 
-#[derive(Deserialize, Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, PartialOrd)]
 pub struct ButtonDoublePush {
     pub brightness: f32,
 }
-#[derive(Deserialize, Debug, Clone, PartialEq, Copy)]
-pub enum ActorKey {
-    Light(light::Key),
-    Switch(switch::Key),
-}
 
-#[derive(Deserialize, Debug, Clone, PartialEq, Copy)]
-pub struct ActorId {
-    device: DeviceId,
-    actor: ActorKey,
-}
-
-#[derive(Clone, PartialEq, Copy, Eq, Ord, PartialOrd, Hash)]
+#[derive(Copy, Clone, Serialize, PartialEq, PartialOrd, Hash, Ord, Eq)]
 pub struct DeviceId {
     pub device_type: DeviceType,
     pub mac: MacAddr6,
@@ -158,6 +148,29 @@ impl Display for DeviceId {
     }
 }
 
+#[derive(Debug, Error)]
+pub enum DeviceIdParseError {
+    #[error("Missing delimiter \"-\"")]
+    MissingDelimiterError,
+    #[error("Cannot parse type {0}")]
+    ErrorParseType(#[from] serde_json::Error),
+    #[error("Cannot parse mac {0}")]
+    ErrorParseMac(#[from] macaddr::ParseError),
+}
+impl FromStr for DeviceId {
+    type Err = DeviceIdParseError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if let Some((type_str, mac_str)) = s.split_once("-") {
+            let device_type = serde_json::from_value(Value::from(type_str))?;
+            let mac = MacAddr6::from_str(mac_str)?;
+            Ok(DeviceId { device_type, mac })
+        } else {
+            Err(DeviceIdParseError::MissingDelimiterError)
+        }
+    }
+}
+
 impl<'de> Deserialize<'de> for DeviceId {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
@@ -169,7 +182,7 @@ impl<'de> Deserialize<'de> for DeviceId {
 
 struct DeviceIdVisitor;
 
-#[derive(Deserialize, Clone, PartialEq, Copy, Debug, Eq, Ord, PartialOrd, Hash)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Copy, Eq, Ord, PartialOrd, Hash)]
 pub enum DeviceType {
     #[serde(rename = "shellyprodm2pm")]
     ShellyProDm2Pm,
@@ -188,16 +201,7 @@ impl<'de> Visitor<'de> for DeviceIdVisitor {
     where
         E: Error,
     {
-        if let Some((type_str, mac_str)) = v.split_once("-") {
-            println!("Type str: {type_str}");
-            let device_type = serde_json::from_value(Value::from(type_str))
-                .map_err(|e| Error::custom(format!("Cannot parse type value {type_str}: {e}")))?;
-            let mac = MacAddr6::from_str(mac_str)
-                .map_err(|e| Error::custom(format!("Cannot parse mac address {mac_str}: {e}")))?;
-            Ok(DeviceId { device_type, mac })
-        } else {
-            Err(Error::custom(format!("Missing delimiter in {v}")))
-        }
+        DeviceId::from_str(v).map_err(|e| Error::custom(format!("Cannot parse device id {v}: {e}")))
     }
 }
 

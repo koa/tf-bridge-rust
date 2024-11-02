@@ -10,7 +10,7 @@ use std::str::FromStr;
 use thiserror::Error;
 
 #[derive(Debug, Clone, Hash)]
-pub struct SerdeStringKey<K: PrefixedKey>(K);
+pub struct SerdeStringKey<K: PrefixedKey>(pub K);
 
 #[derive(Debug, Clone, Copy, Ord, PartialOrd, Eq, PartialEq, Hash)]
 pub struct SerializableMacAddress(MacAddr6);

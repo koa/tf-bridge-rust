@@ -304,28 +304,30 @@ fn test_light() {
             light::Configuration {
                 id: 0,
                 name: None,
-                in_mode: Some(InputMode::Dim),
-                initial_state: InitialState::RestoreLast,
-                auto_on: false,
-                auto_on_delay: Duration::seconds(60),
-                auto_off: false,
-                auto_off_delay: Duration::seconds(60),
-                transition_duration: Duration::seconds(3),
-                min_brightness_on_toggle: 3.0,
-                night_mode: NightMode {
-                    enable: false,
-                    brightness: 50.0,
-                    active_between: Box::new([]),
+                settings: light::Settings {
+                    in_mode: Some(InputMode::Dim),
+                    initial_state: InitialState::RestoreLast,
+                    auto_on: false,
+                    auto_on_delay: Duration::seconds(60),
+                    auto_off: false,
+                    auto_off_delay: Duration::seconds(60),
+                    transition_duration: Duration::seconds(3),
+                    min_brightness_on_toggle: 3.0,
+                    night_mode: NightMode {
+                        enable: false,
+                        brightness: 50.0,
+                        active_between: Box::new([]),
+                    },
+                    button_fade_rate: 3,
+                    button_presets: ButtonPresets {
+                        button_doublepush: Some(ButtonDoublePush { brightness: 100.0 })
+                    },
+                    range_map: None,
+                    power_limit: Some(230),
+                    voltage_limit: Some(280),
+                    undervoltage_limit: Some(200),
+                    current_limit: Some(1.22),
                 },
-                button_fade_rate: 3,
-                button_presets: ButtonPresets {
-                    button_doublepush: Some(ButtonDoublePush { brightness: 100.0 })
-                },
-                range_map: None,
-                power_limit: Some(230),
-                voltage_limit: Some(280),
-                undervoltage_limit: Some(200),
-                current_limit: Some(1.22)
             }
         );
     } else {
@@ -428,18 +430,20 @@ fn test_switch() {
             switch::Configuration {
                 id: 1,
                 name: None,
-                in_mode: Some(common::InputMode::Follow),
-                initial_state: common::InitialState::MatchInput,
-                auto_on: false,
-                auto_on_delay: Duration::seconds(60),
-                auto_off: false,
-                auto_off_delay: Duration::seconds(60),
-                autorecover_voltage_errors: Some(false),
-                input_id: None,
-                power_limit: Some(4480),
-                voltage_limit: Some(280),
-                undervoltage_limit: Some(0),
-                current_limit: Some(16.0)
+                settings: switch::Settings {
+                    in_mode: Some(common::InputMode::Follow),
+                    initial_state: common::InitialState::MatchInput,
+                    auto_on: false,
+                    auto_on_delay: Duration::seconds(60),
+                    auto_off: false,
+                    auto_off_delay: Duration::seconds(60),
+                    autorecover_voltage_errors: Some(false),
+                    input_id: None,
+                    power_limit: Some(4480),
+                    voltage_limit: Some(280),
+                    undervoltage_limit: Some(0),
+                    current_limit: Some(16.0),
+                },
             }
         );
     } else {

@@ -4,11 +4,13 @@ use crate::devices::shelly::{
 };
 use jsonrpsee::core::Serialize;
 use jsonrpsee::proc_macros::rpc;
+use serde::de::value::CowStrDeserializer;
 use serde::{
     de::{Error, Visitor},
     Deserialize, Deserializer,
 };
 use serde_json::value::RawValue;
+use std::borrow::Cow;
 use std::fmt::{Display, Formatter};
 pub use std::{fmt::Debug, str::FromStr};
 
@@ -90,11 +92,27 @@ pub enum ComponentEntry {
     Knx(knx::Component),
 }
 
-#[derive(Clone, PartialEq, Copy, Hash, Eq)]
+#[derive(Serialize, Deserialize, Clone, PartialEq, Copy, Hash, Eq, Debug, PartialOrd, Ord)]
+#[serde(untagged)]
 pub enum SwitchingKey {
     Switch(switch::Key),
     Light(light::Key),
 }
+
+impl FromStr for SwitchingKey {
+    type Err = serde::de::value::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::deserialize(CowStrDeserializer::new(Cow::Borrowed(s)))
+    }
+}
+
+impl Display for SwitchingKey {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        self.serialize(f)
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Copy, Hash, Eq, Ord, PartialOrd)]
 pub enum ComponentKey {
     Input(input::Key),
@@ -142,7 +160,7 @@ impl Display for ComponentKey {
     }
 }
 
-#[derive(Clone, PartialEq, Copy)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, PartialOrd)]
 pub struct SwitchingKeyId {
     pub device: DeviceId,
     pub key: SwitchingKey,

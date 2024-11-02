@@ -1,13 +1,13 @@
 use std::{collections::BTreeMap, net::IpAddr, time::Duration};
 
-use serde::{Deserialize, Serialize};
-use strum_macros::EnumIter;
-use tinkerforge_async::base58::Uid;
-
 use crate::data::registry::{
     BrightnessKey, ClockKey, DualButtonKey, LightColorKey, SingleButtonKey, SwitchOutputKey,
     TemperatureKey,
 };
+use crate::devices::shelly;
+use serde::{Deserialize, Serialize};
+use strum_macros::EnumIter;
+use tinkerforge_async::base58::Uid;
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
 pub struct Wiring {
@@ -152,6 +152,13 @@ pub struct RelayChannelEntry {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Ord, PartialOrd)]
 pub struct TemperatureSettings {
     pub output: TemperatureKey,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, PartialOrd, Default)]
+pub struct ShellyDeviceSettings {
+    pub light_registers: BTreeMap<BrightnessKey, shelly::shelly::SwitchingKeyId>,
+    pub lights: BTreeMap<shelly::light::Key, shelly::light::Settings>,
+    pub switches: BTreeMap<shelly::switch::Key, shelly::switch::Settings>,
 }
 
 #[cfg(test)]

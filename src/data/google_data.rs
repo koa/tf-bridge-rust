@@ -1,6 +1,6 @@
-use crate::devices::shelly::shelly::{ComponentAddress, ComponentKey};
+use crate::data::wiring::ShellyDeviceSettings;
+use crate::devices::shelly;
 use crate::shelly::common::DeviceId;
-use crate::shelly::shelly::ComponentEntry;
 use crate::{
     data::{
         registry::{
@@ -30,8 +30,12 @@ use google_sheets4::{
     Sheets,
 };
 use log::{debug, error, info};
+use ron::de;
+use serde::de::value::StrDeserializer;
 use serde::Deserialize;
 use serde_json::Value;
+use std::convert::Infallible;
+use std::error::Error;
 use std::iter::Map;
 use std::{
     array,
@@ -46,7 +50,7 @@ use std::{
 };
 use thiserror::Error;
 use tinkerforge_async::{base58::Uid, ip_connection::Version, DeviceIdentifier};
-use url::quirks::host;
+use url::quirks::{host, hostname};
 
 #[derive(Error, Debug)]
 pub enum GoogleDataError {
@@ -64,6 +68,7 @@ pub enum GoogleDataError {
     HeaderNotFound(HeaderError, Box<str>),
 }
 
+#[derive(Copy, Clone, Debug)]
 enum LightTemplateTypes {
     Switch,
     Dimm,
@@ -147,6 +152,7 @@ struct GoogleSheetWireBuilder {
     relays: BTreeMap<Uid, RelaySettings>,
     tinkerforge_endpoints: Vec<IpAddr>,
     shelly_endpoints: Vec<IpAddr>,
+    shelly_devices: BTreeMap<DeviceId, ShellyDeviceSettings>,
 
     dual_input_dimmers: Vec<DualInputDimmer>,
     dual_input_switches: Vec<DualInputSwitch>,
@@ -160,6 +166,7 @@ struct GoogleSheetWireBuilder {
     touchscreen_whitebalance_addresses: HashMap<Box<str>, LightColorKey>,
     touchscreen_brightness_addresses: HashMap<Box<str>, BrightnessKey>,
     motion_detector_adresses: HashMap<Box<str>, SingleButtonKey>,
+    shelly_devices_by_name: HashMap<Box<str>, DeviceId>,
 
     endpoint_names: HashMap<IpAddr, Box<str>>,
 
@@ -499,7 +506,7 @@ impl GoogleSheetWireBuilder {
         context: &'a ParserContext<'a>,
     ) -> Result<(), GoogleDataError> {
         let endpoints_config = context.config.tinkerforge_endpoints();
-        for endpoint in self
+        for (endpoint, _, _) in self
             .parse_ip_endpoints(context, endpoints_config)
             .await?
             .iter()
@@ -513,12 +520,18 @@ impl GoogleSheetWireBuilder {
         context: &'a ParserContext<'a>,
     ) -> Result<(), GoogleDataError> {
         let endpoints_config = context.config.shelly_endpoints();
-        for endpoint in self
+        for (endpoint, hostname, place) in self
             .parse_ip_endpoints(context, endpoints_config)
             .await?
             .iter()
         {
             self.shelly_endpoints.push(*endpoint);
+            if let Some(device_id) = hostname
+                .as_ref()
+                .and_then(|name| DeviceId::from_str(name.to_ascii_lowercase().as_str()).ok())
+            {
+                self.shelly_devices_by_name.insert(place.clone(), device_id);
+            }
         }
         Ok(())
     }
@@ -527,7 +540,7 @@ impl GoogleSheetWireBuilder {
         &'a mut self,
         context: &'a ParserContext<'a>,
         endpoints_config: &GoogleEndpointData,
-    ) -> Result<Box<[IpAddr]>, GoogleDataError> {
+    ) -> Result<Box<[(IpAddr, Option<Box<str>>, Box<str>)]>, GoogleDataError> {
         let mut target_endpoints = Vec::new();
         for (address, state_cell, place, hostname_cell) in GoogleTable::connect(
             &context.spreadsheet_methods,
@@ -552,16 +565,21 @@ impl GoogleSheetWireBuilder {
                     (
                         ip,
                         state,
-                        place.get_content().unwrap_or_default().into(),
+                        Into::<Box<str>>::into(place.get_content().unwrap_or_default()),
                         hostname,
                     )
                 })
         }) {
-            target_endpoints.push(address);
+            let current_state = context.state.and_then(|s| s.endpoint(&address));
+            let hostname = current_state
+                .and_then(|d| d.hostname.as_deref())
+                .or_else(|| hostname_cell.get_content())
+                .map(|s| s.to_string().into_boxed_str());
+
+            target_endpoints.push((address, hostname, place.clone()));
+
             self.endpoint_names.insert(address, place);
-            for update in context
-                .state
-                .and_then(|s| s.endpoint(&address))
+            for update in current_state
                 .map(|data| {
                     (
                         format!(
@@ -727,7 +745,7 @@ impl GoogleSheetWireBuilder {
                     ring_button,
                 });
             }
-            update_state_new(
+            update_state_tf(
                 |v| self.updates.push(v),
                 context.state,
                 &old_state,
@@ -846,12 +864,12 @@ impl GoogleSheetWireBuilder {
                 },
             );
             if let Some(uid) = touchscreen {
-                update_state_new(
+                update_state_tf(
                     |s| self.updates.push(s), context.state, &touchscreen_state, uid
                     , &context.timestamp_format);
             }
             if let Some(uid) = temp_sensor {
-                update_state_new(|s| self.updates.push(s), context.state, &temperature_state, uid, &context.timestamp_format)
+                update_state_tf(|s| self.updates.push(s), context.state, &temperature_state, uid, &context.timestamp_format)
             }
         }
         let controller_rows = fill_device_idx(|s| self.updates.push(s), device_ids_of_rooms);
@@ -969,7 +987,7 @@ impl GoogleSheetWireBuilder {
                     device_address,
                     idx,
                 });
-            update_state_new(
+            update_state_tf(
                 |v| self.updates.push(v),
                 context.state,
                 &state_cell,
@@ -1032,22 +1050,207 @@ impl GoogleSheetWireBuilder {
                 }
             }
         }
-        struct LightRowContent<'a> {
-            light_template: &'a LightTemplateTypes,
-            device_id_in_room: DeviceIdxCell<'a>,
-            device_address: Uid,
-            bus_start_address: u16,
-            manual_buttons: Box<[Box<str>]>,
-            presence_detectors: Box<[Box<str>]>,
-            touchscreen_whitebalance: Option<Box<str>>,
-            touchscreen_brightness: Option<Box<str>>,
+
+        let device_ids_of_rooms = HashMap::<_, Vec<_>>::new();
+        let device_ids_of_rooms = self
+            .parse_tinkerforge_lights(&context, &mut light_template_map, device_ids_of_rooms)
+            .await?;
+        let device_ids_of_rooms = self
+            .parse_shelly_lights(&context, &mut light_template_map, device_ids_of_rooms)
+            .await?;
+
+        let light_device_rows = fill_device_idx(|v| self.updates.push(v), device_ids_of_rooms);
+
+        for (device_idx, light_row) in light_device_rows {
+            let template = light_row.light_template;
+            let mut manual_buttons = light_row
+                .manual_buttons
+                .iter()
+                .flat_map(|name| self.dual_button_adresses.get(name))
+                .copied()
+                .collect::<Vec<_>>()
+                .into_boxed_slice();
+            manual_buttons.sort();
+            let mut presence_detectors = light_row
+                .presence_detectors
+                .iter()
+                .flat_map(|name| self.motion_detector_adresses.get(name))
+                .copied()
+                .collect::<Vec<_>>()
+                .into_boxed_slice();
+            presence_detectors.sort();
+            let auto_switch_off_time = if manual_buttons.is_empty() {
+                Duration::from_secs(2 * 60)
+            } else if presence_detectors.is_empty() {
+                Duration::from_secs(2 * 3600)
+            } else {
+                Duration::from_secs(3600)
+            };
+            match template {
+                LightTemplateTypes::Switch => {
+                    let register = SwitchOutputKey::Light(device_idx);
+                    match light_row.endpoint {
+                        LightEndpoint::Tinkerforge {
+                            device_address,
+                            bus_start_address,
+                        } => {
+                            let dmx_bricklet_settings =
+                                self.dmx_bricklets.entry(device_address).or_default();
+                            dmx_bricklet_settings.push(DmxConfigEntry::Switch {
+                                register,
+                                channel: bus_start_address,
+                            });
+                        }
+                        LightEndpoint::Shelly(_) => {
+                            todo!()
+                        }
+                    }
+                    if manual_buttons.is_empty() {
+                        if !presence_detectors.is_empty() {
+                            self.motion_detectors.push(MotionDetector::Switch {
+                                input: presence_detectors,
+                                output: register,
+                                switch_off_time: auto_switch_off_time,
+                            });
+                        }
+                    } else {
+                        self.dual_input_switches.push(DualInputSwitch {
+                            input: manual_buttons,
+                            output: register,
+                            auto_switch_off_time,
+                            presence: presence_detectors,
+                        });
+                    }
+                }
+                LightTemplateTypes::Dimm => {
+                    let register = BrightnessKey::Light(device_idx);
+                    match light_row.endpoint {
+                        LightEndpoint::Tinkerforge {
+                            device_address,
+                            bus_start_address,
+                        } => {
+                            let dmx_bricklet_settings =
+                                self.dmx_bricklets.entry(device_address).or_default();
+                            dmx_bricklet_settings.push(DmxConfigEntry::Dimm {
+                                register,
+                                channel: bus_start_address,
+                            });
+                        }
+                        LightEndpoint::Shelly(shelly::shelly::SwitchingKeyId {
+                            device,
+                            key: shelly::shelly::SwitchingKey::Light(key),
+                        }) => {
+                            let device_entry = self.shelly_devices.entry(device).or_default();
+                            device_entry.light_registers.insert(
+                                register,
+                                shelly::shelly::SwitchingKeyId {
+                                    device,
+                                    key: shelly::shelly::SwitchingKey::Light(key),
+                                },
+                            );
+                            device_entry.lights.insert(
+                                key,
+                                shelly::light::Settings {
+                                    ..shelly::light::Settings::default()
+                                },
+                            );
+                        }
+                        LightEndpoint::Shelly(shelly::shelly::SwitchingKeyId {
+                            device: _,
+                            key: shelly::shelly::SwitchingKey::Switch(_),
+                        }) => {
+                            todo!("Write error message to spreadsheet")
+                        }
+                    }
+                    if manual_buttons.is_empty() {
+                        if !presence_detectors.is_empty() {
+                            self.motion_detectors.push(MotionDetector::Dimmer {
+                                input: presence_detectors,
+                                output: register,
+                                brightness: light_row
+                                    .touchscreen_brightness
+                                    .and_then(|k| self.touchscreen_brightness_addresses.get(&k))
+                                    .copied(),
+                                switch_off_time: auto_switch_off_time,
+                            });
+                        }
+                    } else {
+                        self.dual_input_dimmers.push(DualInputDimmer {
+                            input: manual_buttons,
+                            output: register,
+                            auto_switch_off_time,
+                            presence: presence_detectors,
+                        })
+                    }
+                }
+                LightTemplateTypes::DimmWhitebalance {
+                    warm_temperature,
+                    cold_temperature,
+                } => {
+                    let device_in_room = device_idx;
+
+                    let output_brightness_register = BrightnessKey::Light(device_in_room);
+                    let whitebalance_register = if let Some(wb) = light_row
+                        .touchscreen_whitebalance
+                        .and_then(|k| self.touchscreen_whitebalance_addresses.get(&k))
+                    {
+                        *wb
+                    } else {
+                        LightColorKey::Light(device_in_room)
+                    };
+                    match light_row.endpoint {
+                        LightEndpoint::Tinkerforge {
+                            device_address,
+                            bus_start_address,
+                        } => {
+                            let dmx_bricklet_settings =
+                                self.dmx_bricklets.entry(device_address).or_default();
+                            dmx_bricklet_settings.push(DmxConfigEntry::DimmWhitebalance {
+                                brightness_register: output_brightness_register,
+                                whitebalance_register,
+                                warm_channel: bus_start_address,
+                                cold_channel: bus_start_address + 1,
+                                warm_mireds: warm_temperature,
+                                cold_mireds: cold_temperature,
+                            });
+                        }
+                        LightEndpoint::Shelly(_) => {
+                            todo!()
+                        }
+                    }
+
+                    if manual_buttons.is_empty() {
+                        if !presence_detectors.is_empty() {
+                            self.motion_detectors.push(MotionDetector::Dimmer {
+                                input: presence_detectors,
+                                output: output_brightness_register,
+                                brightness: light_row
+                                    .touchscreen_brightness
+                                    .and_then(|k| self.touchscreen_brightness_addresses.get(&k))
+                                    .copied(),
+                                switch_off_time: auto_switch_off_time,
+                            });
+                        }
+                    } else {
+                        self.dual_input_dimmers.push(DualInputDimmer {
+                            input: manual_buttons,
+                            output: output_brightness_register,
+                            auto_switch_off_time,
+                            presence: presence_detectors,
+                        });
+                    }
+                }
+            };
         }
-        impl<'a> DeviceIdxAccessNew<'a> for LightRowContent<'a> {
-            fn id_cell<'b>(&'b mut self) -> &'b mut DeviceIdxCell<'a> {
-                &mut self.device_id_in_room
-            }
-        }
-        let mut device_ids_of_rooms = HashMap::<_, Vec<_>>::new();
+        Ok(())
+    }
+
+    async fn parse_tinkerforge_lights<'a>(
+        &mut self,
+        context: &'a ParserContext<'a>,
+        light_template_map: &HashMap<Box<str>, LightTemplateTypes>,
+        mut device_ids_of_rooms: HashMap<Room, Vec<LightRowContent<'a>>>,
+    ) -> Result<HashMap<Room, Vec<LightRowContent<'a>>>, GoogleDataError> {
         if let Some(light_config) = context.config.light_tinkerforge() {
             let button_columns = light_config
                 .manual_buttons()
@@ -1098,7 +1301,7 @@ impl GoogleSheetWireBuilder {
                     DeviceIdxCell(light_idx),
                     template
                         .get_content()
-                        .and_then(|t| light_template_map.get(t)),
+                        .and_then(|t| light_template_map.get(t).copied()),
                     address
                         .get_content()
                         .map(Uid::from_str)
@@ -1128,14 +1331,16 @@ impl GoogleSheetWireBuilder {
                         .push(LightRowContent {
                             light_template,
                             device_id_in_room,
-                            device_address,
-                            bus_start_address: bus_start_address as u16,
                             manual_buttons,
                             presence_detectors,
                             touchscreen_whitebalance,
                             touchscreen_brightness,
+                            endpoint: LightEndpoint::Tinkerforge {
+                                device_address,
+                                bus_start_address: bus_start_address as u16,
+                            },
                         });
-                    update_state_new(
+                    update_state_tf(
                         |v| self.updates.push(v),
                         context.state,
                         &old_state,
@@ -1146,137 +1351,121 @@ impl GoogleSheetWireBuilder {
                 }
             }
         }
-        let light_device_rows = fill_device_idx(|v| self.updates.push(v), device_ids_of_rooms);
-
-        for (device_idx, light_row) in light_device_rows {
-            let dmx_bricklet_settings = self
-                .dmx_bricklets
-                .entry(light_row.device_address)
-                .or_default();
-            let template = light_row.light_template;
-
-            let mut manual_buttons = light_row
-                .manual_buttons
+        Ok(device_ids_of_rooms)
+    }
+    async fn parse_shelly_lights<'a>(
+        &mut self,
+        context: &'a ParserContext<'a>,
+        light_template_map: &HashMap<Box<str>, LightTemplateTypes>,
+        mut device_ids_of_rooms: HashMap<Room, Vec<LightRowContent<'a>>>,
+    ) -> Result<HashMap<Room, Vec<LightRowContent<'a>>>, GoogleDataError> {
+        info!("Shelly devices by name: {:#?}", self.shelly_devices_by_name);
+        if let Some(light_config) = context.config.light_shelly() {
+            let device_ids_of_rooms = &mut device_ids_of_rooms;
+            let button_columns = light_config
+                .manual_buttons()
                 .iter()
-                .flat_map(|name| self.dual_button_adresses.get(name))
-                .copied()
-                .collect::<Vec<_>>()
-                .into_boxed_slice();
-            manual_buttons.sort();
-            let mut presence_detectors = light_row
-                .presence_detectors
+                .map(|c| c.as_ref())
+                .collect::<Vec<_>>();
+            let presence_detector_columns = light_config
+                .presence_detectors()
                 .iter()
-                .flat_map(|name| self.motion_detector_adresses.get(name))
-                .copied()
-                .collect::<Vec<_>>()
-                .into_boxed_slice();
-            presence_detectors.sort();
-            let auto_switch_off_time = if manual_buttons.is_empty() {
-                Duration::from_secs(2 * 60)
-            } else if presence_detectors.is_empty() {
-                Duration::from_secs(2 * 3600)
-            } else {
-                Duration::from_secs(3600)
-            };
-            match template {
-                LightTemplateTypes::Switch => {
-                    let register = SwitchOutputKey::Light(device_idx);
-                    dmx_bricklet_settings.push(DmxConfigEntry::Switch {
-                        register,
-                        channel: light_row.bus_start_address,
-                    });
-                    if manual_buttons.is_empty() {
-                        if !presence_detectors.is_empty() {
-                            self.motion_detectors.push(MotionDetector::Switch {
-                                input: presence_detectors,
-                                output: register,
-                                switch_off_time: auto_switch_off_time,
-                            });
-                        }
-                    } else {
-                        self.dual_input_switches.push(DualInputSwitch {
-                            input: manual_buttons,
-                            output: register,
-                            auto_switch_off_time,
-                            presence: presence_detectors,
-                        });
-                    }
-                }
-                LightTemplateTypes::Dimm => {
-                    let register = BrightnessKey::Light(device_idx);
-                    dmx_bricklet_settings.push(DmxConfigEntry::Dimm {
-                        register,
-                        channel: light_row.bus_start_address,
-                    });
-                    if manual_buttons.is_empty() {
-                        if !presence_detectors.is_empty() {
-                            self.motion_detectors.push(MotionDetector::Dimmer {
-                                input: presence_detectors,
-                                output: register,
-                                brightness: light_row
-                                    .touchscreen_brightness
-                                    .and_then(|k| self.touchscreen_brightness_addresses.get(&k))
-                                    .copied(),
-                                switch_off_time: auto_switch_off_time,
-                            });
-                        }
-                    } else {
-                        self.dual_input_dimmers.push(DualInputDimmer {
-                            input: manual_buttons,
-                            output: register,
-                            auto_switch_off_time,
-                            presence: presence_detectors,
-                        })
-                    }
-                }
-                LightTemplateTypes::DimmWhitebalance {
-                    warm_temperature,
-                    cold_temperature,
-                } => {
-                    let device_in_room = device_idx;
+                .map(|c| c.as_ref())
+                .collect::<Vec<_>>();
 
-                    let output_brightness_register = BrightnessKey::Light(device_in_room);
-                    let whitebalance_register = if let Some(wb) = light_row
-                        .touchscreen_whitebalance
-                        .and_then(|k| self.touchscreen_whitebalance_addresses.get(&k))
+            for (
+                [room, light_idx, template, device_name_cell, shelly_connector, whitebalance, brightness, old_state],
+                [buttons, presence_detectors],
+            ) in GoogleTable::connect(
+                &context.spreadsheet_methods,
+                [
+                    light_config.room_id(),
+                    light_config.light_idx(),
+                    light_config.template(),
+                    light_config.device_name(),
+                    light_config.shelly_connector(),
+                    light_config.touchscreen_whitebalance(),
+                    light_config.touchscreen_brightness(),
+                    light_config.state(),
+                ],
+                [&button_columns, &presence_detector_columns],
+                context.config.spreadsheet_id(),
+                light_config.sheet(),
+                light_config.range(),
+            )
+            .await?
+            {
+                if let (
+                    Some(room),
+                    device_id_in_room,
+                    Some(light_template),
+                    Some(actor_id),
+                    manual_buttons,
+                    presence_detectors,
+                    touchscreen_whitebalance,
+                    touchscreen_brightness,
+                    old_state,
+                ) = (
+                    room.get_content().map(Room::from_str).and_then(Result::ok),
+                    DeviceIdxCell(light_idx),
+                    template
+                        .get_content()
+                        .and_then(|t| light_template_map.get(t).copied()),
                     {
-                        *wb
-                    } else {
-                        LightColorKey::Light(device_in_room)
-                    };
-                    dmx_bricklet_settings.push(DmxConfigEntry::DimmWhitebalance {
-                        brightness_register: output_brightness_register,
-                        whitebalance_register,
-                        warm_channel: light_row.bus_start_address,
-                        cold_channel: light_row.bus_start_address + 1,
-                        warm_mireds: *warm_temperature,
-                        cold_mireds: *cold_temperature,
-                    });
-                    if manual_buttons.is_empty() {
-                        if !presence_detectors.is_empty() {
-                            self.motion_detectors.push(MotionDetector::Dimmer {
-                                input: presence_detectors,
-                                output: output_brightness_register,
-                                brightness: light_row
-                                    .touchscreen_brightness
-                                    .and_then(|k| self.touchscreen_brightness_addresses.get(&k))
-                                    .copied(),
-                                switch_off_time: auto_switch_off_time,
-                            });
-                        }
-                    } else {
-                        self.dual_input_dimmers.push(DualInputDimmer {
-                            input: manual_buttons,
-                            output: output_brightness_register,
-                            auto_switch_off_time,
-                            presence: presence_detectors,
+                        Option::zip(
+                            device_name_cell
+                                .get_content()
+                                .and_then(|name| self.shelly_devices_by_name.get(name).cloned()),
+                            shelly_connector
+                                .get_content()
+                                .map(shelly::shelly::SwitchingKey::from_str)
+                                .and_then(Result::ok),
+                        )
+                        .map(|(device, key)| shelly::shelly::SwitchingKeyId { device, key })
+                    },
+                    buttons
+                        .iter()
+                        .filter_map(|cell| GoogleCellData::get_content(cell))
+                        .filter(|s| !s.is_empty())
+                        .map(<&str>::into)
+                        .collect::<Vec<_>>()
+                        .into_boxed_slice(),
+                    presence_detectors
+                        .iter()
+                        .filter_map(|cell| cell.get_content())
+                        .filter(|s| !s.is_empty())
+                        .map(<&str>::into)
+                        .collect::<Vec<_>>()
+                        .into_boxed_slice(),
+                    whitebalance.get_content().map(<&str>::into),
+                    brightness.get_content().map(<&str>::into),
+                    old_state,
+                ) {
+                    device_ids_of_rooms
+                        .entry(room)
+                        .or_default()
+                        .push(LightRowContent {
+                            light_template,
+                            device_id_in_room,
+                            manual_buttons,
+                            presence_detectors,
+                            touchscreen_whitebalance,
+                            touchscreen_brightness,
+                            endpoint: LightEndpoint::Shelly(actor_id),
                         });
-                    }
+                    // TODO: implement shelly state
+                    /*update_state_tf(
+                        |v| self.updates.push(v),
+                        context.state,
+                        &old_state,
+                        device_name,
+                        &context.timestamp_format,
+                    );*/
+                    //info!("Room: {room:?}, idx: {coordinates}");
                 }
             }
         }
-
-        Ok(())
+        Ok(device_ids_of_rooms)
     }
 
     async fn parse_buttons<'a>(
@@ -1379,7 +1568,7 @@ impl GoogleSheetWireBuilder {
                 first_input_idx.get_integer().map(|id| id as u8),
                 old_state,
             ) {
-                update_state_new(
+                update_state_tf(
                     |v| self.updates.push(v),
                     context.state,
                     &state_data,
@@ -1496,7 +1685,7 @@ fn fill_device_idx<'a, R: DeviceIdxAccessNew<'a>, F: FnMut(ValueRange)>(
     device_rows
 }
 
-fn update_state_new<F: FnMut(ValueRange)>(
+fn update_state_tf<F: FnMut(ValueRange)>(
     mut updater: F,
     current_state: Option<&State>,
     state_cell: &GoogleCellData,
@@ -1939,7 +2128,27 @@ fn override_table<const N: usize, I>(
     }
     output_table.clean_remaining_rows(|v| updates.push(v));
 }
-
+enum LightEndpoint {
+    Tinkerforge {
+        device_address: Uid,
+        bus_start_address: u16,
+    },
+    Shelly(shelly::shelly::SwitchingKeyId),
+}
+struct LightRowContent<'a> {
+    light_template: LightTemplateTypes,
+    device_id_in_room: DeviceIdxCell<'a>,
+    endpoint: LightEndpoint,
+    manual_buttons: Box<[Box<str>]>,
+    presence_detectors: Box<[Box<str>]>,
+    touchscreen_whitebalance: Option<Box<str>>,
+    touchscreen_brightness: Option<Box<str>>,
+}
+impl<'a> DeviceIdxAccessNew<'a> for LightRowContent<'a> {
+    fn id_cell<'b>(&'b mut self) -> &'b mut DeviceIdxCell<'a> {
+        &mut self.device_id_in_room
+    }
+}
 #[cfg(test)]
 mod test {
     use env_logger::Env;
