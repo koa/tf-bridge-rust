@@ -104,7 +104,7 @@ pub async fn read_sheet_data(state: Option<&State>) -> Result<Option<Wiring>, Go
 
         let client = Client::builder().build(
             connector_builder
-                .with_native_roots()
+                .with_native_roots()?
                 .https_or_http()
                 .enable_http1()
                 //.enable_http2()
