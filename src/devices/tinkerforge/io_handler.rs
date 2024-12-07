@@ -199,7 +199,7 @@ enum IoMessage {
     Release(u8),
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Default, Debug)]
 enum ChannelSetting {
     #[default]
     None,
@@ -214,7 +214,6 @@ async fn io_16_v2_loop(
     channel_settings: [ChannelSetting; 16],
 ) -> Result<(), IoHandlerError> {
     for i in 0..16 {
-        info!("Prepare channel {i}");
         bricklet
             .set_input_value_callback_configuration(SetInputValueCallbackConfigurationRequest {
                 channel: i,
@@ -223,7 +222,6 @@ async fn io_16_v2_loop(
             })
             .await?;
     }
-    info!("Channels prepared");
     let button_event_stream = bricklet.input_value_stream().await.map(|event| {
         if !event.value {
             IoMessage::Press(event.channel)

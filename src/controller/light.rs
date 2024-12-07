@@ -1,7 +1,7 @@
 use std::{hash::Hash, num::Saturating, time::Duration};
 
 use futures::stream::SelectAll;
-use log::error;
+use log::{error, info};
 use tokio::{
     sync::mpsc::{self, error::SendError, Sender},
     task::AbortHandle,
@@ -261,6 +261,7 @@ async fn motion_detector_task(
     Ok(())
 }
 
+#[derive(Debug)]
 enum DimmerEvent<L: Copy + Eq + Hash> {
     ButtonState(ButtonState<L>),
     KeepPressing(L),

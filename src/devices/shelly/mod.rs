@@ -1,3 +1,12 @@
+use crate::devices::shelly::shelly::ComponentKey;
+use crate::devices::HandleRegistry;
+use crate::{
+    data::{
+        registry::EventRegistry, settings::Shelly, state::StateUpdateMessage, wiring::ShellyDevices,
+    },
+    devices::shelly::shelly::{ComponentEntry, ShellyClient},
+    terminator::{TestamentReceiver, TestamentSender},
+};
 use jsonrpsee::{
     client_transport::{
         ws::WsHandshakeError,
@@ -9,6 +18,7 @@ use jsonrpsee::{
     },
 };
 use log::{error, info};
+use std::ops::{Deref, DerefMut};
 use std::{
     fmt::{Display, Formatter},
     net::IpAddr,
@@ -16,15 +26,8 @@ use std::{
     time::Duration,
 };
 use thiserror::Error;
+use tokio::sync::Mutex;
 use tokio::{sync::mpsc, task, time::sleep};
-
-use crate::{
-    data::{
-        registry::EventRegistry, settings::Shelly, state::StateUpdateMessage, wiring::ShellyDevices,
-    },
-    devices::shelly::shelly::{ComponentEntry, ShellyClient},
-    terminator::{TestamentReceiver, TestamentSender},
-};
 
 pub mod ble;
 pub mod bthome;
@@ -96,17 +99,21 @@ fn start_enumeration_listener(
     let (testament, testament_stream) = TestamentSender::create();
     task::spawn(async move {
         let socket_str = format!("{connection:?}");
+        let mut running_components = HandleRegistry::default();
+
         loop {
             info!("Connect to {socket_str}");
-            match run_enumeration_listener(
+            let result = run_enumeration_listener(
                 connection,
                 event_registry.clone(),
                 shelly_devices.clone(),
                 testament_stream.clone(),
                 status_updater.clone(),
+                &mut running_components,
             )
-            .await
-            {
+            .await;
+            info!("Connected to {socket_str}: {result:?}");
+            match result {
                 Ok(_) => {
                     info!("{socket_str}: Finished");
                     break;
@@ -150,6 +157,7 @@ async fn run_enumeration_listener(
     shelly_devices: Arc<ShellyDevices>,
     termination: TestamentReceiver,
     status_updater: mpsc::Sender<StateUpdateMessage>,
+    running_components: &mut HandleRegistry<ComponentKey>,
 ) -> Result<(), ShellyEndpointError> {
     let uri = Url::parse(&format!("ws://{}/rpc", addr)).map_err(enrich_error(addr))?;
 
@@ -158,11 +166,13 @@ async fn run_enumeration_listener(
         .await
         .map_err(enrich_error(addr))?;
     let client: Client = ClientBuilder::default().build_with_tokio(tx, rx);
+    let client = Arc::new(Mutex::new(client));
     let result = client
+        .lock()
+        .await
         .get_deviceinfo(false)
         .await
         .map_err(enrich_error(addr))?;
-    info!("Device Info at {addr}: {result:#?}");
 
     status_updater
         .send(StateUpdateMessage::EndpointConnected {
@@ -174,17 +184,19 @@ async fn run_enumeration_listener(
     let mut offset = 0;
     let mut component_entries = Vec::new();
     loop {
-        info!("{addr} fetch from offset {offset}");
-        match client.get_components(offset, false).await {
+        //info!("{addr} fetch from offset {offset}");
+        let component_batch_result = client.lock().await.get_components(offset, false).await;
+        //info!("{addr}: comps: {result1:#?}");
+        match component_batch_result {
             Ok(response) => {
                 for entry in response.components().iter().cloned() {
                     component_entries.push(entry);
                 }
-                info!(
+                /*info!(
                     "{addr} total: {}, received: {}",
                     response.total(),
                     response.components().len()
-                );
+                );*/
                 if response.total() as usize <= component_entries.len() {
                     break;
                 }
@@ -192,6 +204,8 @@ async fn run_enumeration_listener(
             }
             Err(Error::ParseError(e)) => {
                 let string = client
+                    .lock()
+                    .await
                     .get_components_string(offset, false)
                     .await
                     .map_err(enrich_error(addr))?;
@@ -199,6 +213,7 @@ async fn run_enumeration_listener(
                 return Ok(());
             }
             Err(e) => {
+                error!("Unexpected error from {addr}: {e}");
                 return Err(ShellyEndpointError {
                     base_error: e.into(),
                     endpoint: addr,
@@ -207,6 +222,7 @@ async fn run_enumeration_listener(
         }
     }
     info!("{addr} Found Components: {}", component_entries.len());
+    let configured_device = shelly_devices.devices.get(&result.id);
 
     for entry in component_entries {
         status_updater
@@ -224,24 +240,42 @@ async fn run_enumeration_listener(
             ComponentEntry::Eth(_) => {}
             ComponentEntry::Light(light) => {
                 info!("Light: {}", light.key.id);
+                let id = ComponentKey::Light(light.key);
+                let found_light_config = configured_device.and_then(|d| d.lights.get(&light.key));
+                if let Some(light_config) = found_light_config {
+                    let handle = light.run(&client, light_config, event_registry.clone());
+                    running_components.insert(id, handle);
+                } else {
+                    running_components.remove(&id);
+                }
             }
             ComponentEntry::Mqtt(_) => {}
             ComponentEntry::Switch(switch) => {
                 info!("Switch: {}", switch.key.id);
+
                 switch
-                    .set(&client, true, Some(chrono::Duration::seconds(2)))
+                    .set(
+                        client.lock().await.deref(),
+                        true,
+                        Some(chrono::Duration::seconds(2)),
+                    )
                     .await
                     .map_err(enrich_error(addr))?;
             }
             ComponentEntry::Sys(_) => {}
             ComponentEntry::Wifi(mut wifi) => {
-                wifi.disable(&client).await.map_err(enrich_error(addr))?;
+                wifi.disable(client.lock().await.deref())
+                    .await
+                    .map_err(enrich_error(addr))?;
             }
             ComponentEntry::Ui(_) => {}
             ComponentEntry::Ws(_) => {}
             ComponentEntry::Bthome(_) => {}
             ComponentEntry::Knx(_) => {}
         }
+    }
+    while client.lock().await.is_connected() {
+        sleep(Duration::from_secs(10)).await;
     }
     Ok(())
 }

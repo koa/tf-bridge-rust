@@ -1,17 +1,16 @@
-use crate::devices::shelly::common::DeviceId;
 use crate::devices::shelly::{
-    ble, bthome, cloud, eth, input, knx, light, mqtt, switch, sys, ui, wifi, ws,
+    ble, bthome, cloud, common::DeviceId, eth, input, knx, light, mqtt, switch, sys, ui, wifi, ws,
 };
-use jsonrpsee::core::Serialize;
-use jsonrpsee::proc_macros::rpc;
-use serde::de::value::CowStrDeserializer;
+use jsonrpsee::{core::Serialize, proc_macros::rpc};
 use serde::{
-    de::{Error, Visitor},
+    de::{value::CowStrDeserializer, Error, Visitor},
     Deserialize, Deserializer,
 };
 use serde_json::value::RawValue;
-use std::borrow::Cow;
-use std::fmt::{Display, Formatter};
+use std::{
+    borrow::Cow,
+    fmt::{Display, Formatter},
+};
 pub use std::{fmt::Debug, str::FromStr};
 
 #[rpc(client)]

@@ -305,6 +305,7 @@ fn test_light() {
                 id: 0,
                 name: None,
                 settings: light::Settings {
+                    name: Default::default(),
                     in_mode: Some(InputMode::Dim),
                     initial_state: InitialState::RestoreLast,
                     auto_on: false,

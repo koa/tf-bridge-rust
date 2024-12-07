@@ -1,17 +1,31 @@
-use chrono::{DateTime, Duration, Utc};
-use jsonrpsee::core::client::{Client, Error};
-use jsonrpsee::core::Serialize;
-use serde::Deserialize;
-use serde_with::{formats::Flexible, serde_as, DurationSeconds, TimestampSeconds};
-
-use crate::devices::shelly::light::rpc::LightClient;
 use crate::{
-    devices::shelly::common::{
-        ButtonPresets, InitialState, InputMode, LastCommandSource, StatusError, Temperature,
+    data::{registry::EventRegistry, wiring::ShellyLightSettings},
+    devices::shelly::{
+        common::{
+            ButtonPresets, InitialState, InputMode, LastCommandSource, SetConfigResponse,
+            StatusError, Temperature,
+        },
+        light::rpc::LightClient,
+        ShellyError,
     },
     serde::{PrefixedKey, SerdeStringKey},
     shelly::common::ActiveEnergy,
 };
+use chrono::{DateTime, Duration, Utc};
+use futures::StreamExt;
+use jsonrpsee::core::{
+    client::{Client, Error},
+    Serialize,
+};
+use log::{error, info};
+use serde::Deserialize;
+use serde_with::{formats::Flexible, serde_as, DurationSeconds, TimestampSeconds};
+use std::num::Saturating;
+use std::sync::Arc;
+use std::time;
+use tokio::sync::Mutex;
+use tokio::task::JoinHandle;
+use tokio::time::sleep;
 
 pub type Key = SerdeStringKey<LightKey>;
 
@@ -42,6 +56,7 @@ pub struct Status {
     pub current: Option<f64>,
     pub calibration: Option<Calibration>,
     pub errors: Option<Box<[StatusError]>>,
+    #[serde(default)]
     pub flags: Box<[StatusFlags]>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, PartialOrd)]
@@ -54,6 +69,8 @@ pub struct Configuration {
 #[serde_as]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, PartialOrd)]
 pub struct Settings {
+    #[serde(default)]
+    pub name: Box<str>,
     pub in_mode: Option<InputMode>,
     pub initial_state: InitialState,
     pub auto_on: bool,
@@ -77,12 +94,13 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            in_mode: None,
+            name: Default::default(),
+            in_mode: Some(InputMode::Dim),
             initial_state: InitialState::Off,
             auto_on: false,
-            auto_on_delay: Default::default(),
-            auto_off: false,
-            auto_off_delay: Default::default(),
+            auto_on_delay: Duration::seconds(1),
+            auto_off: true,
+            auto_off_delay: Duration::hours(2),
             transition_duration: Default::default(),
             min_brightness_on_toggle: 0.0,
             night_mode: NightMode {
@@ -90,7 +108,7 @@ impl Default for Settings {
                 brightness: 0.0,
                 active_between: Box::new([]),
             },
-            button_fade_rate: 0,
+            button_fade_rate: 3,
             button_presets: ButtonPresets {
                 button_doublepush: None,
             },
@@ -121,7 +139,7 @@ pub struct NightMode {
     pub active_between: Box<[Box<str>]>,
 }
 
-#[derive(Debug, Clone, PartialEq, Copy, Hash, Eq, Ord, PartialOrd)]
+#[derive(Debug, Clone, PartialEq, Copy, Hash, Eq, Ord, PartialOrd, Serialize, Deserialize)]
 pub struct LightKey {
     pub id: u16,
 }
@@ -143,35 +161,136 @@ impl From<LightKey> for u16 {
     }
 }
 impl Component {
-    pub fn client<'a>(&'a mut self, client: &'a Client) -> ComponentClient<'a> {
+    pub fn client(self, client: Arc<Mutex<Client>>) -> ComponentClient {
         ComponentClient {
             component: self,
             client,
         }
     }
-}
-struct ComponentClient<'a> {
-    component: &'a mut Component,
-    client: &'a Client,
+    pub fn run(
+        self,
+        client: &Arc<Mutex<Client>>,
+        settings: &ShellyLightSettings,
+        event_registry: EventRegistry,
+    ) -> JoinHandle<()> {
+        let client = client.clone();
+        let light = self.clone();
+        let settings = settings.clone();
+        tokio::spawn(async move {
+            match light.run_loop(client, settings, event_registry).await {
+                Ok(()) => {
+                    info!("Light Terminated")
+                }
+                Err(e) => {
+                    error!("Light {} failed: {}", self.key.id, e)
+                }
+            }
+        })
+    }
+    async fn run_loop(
+        self,
+        client: Arc<Mutex<Client>>,
+        settings: ShellyLightSettings,
+        event_registry: EventRegistry,
+    ) -> Result<(), ShellyError> {
+        let new_settings = &settings.settings;
+        let client = self.client(client.clone());
+        if new_settings != &client.component.config.settings {
+            client.set_config(new_settings.clone()).await?;
+        };
+        if client
+            .component
+            .status
+            .flags
+            .contains(&StatusFlags::Uncalibrated)
+        {
+            client.calibrate().await?;
+        }
+        let mut stream = event_registry
+            .brightness_stream(settings.light_register)
+            .await
+            .map(LoopEvent::SetBrightness);
+        while let Some(event) = stream.next().await {
+            match event {
+                LoopEvent::SetBrightness(event) => {
+                    client
+                        .set_brightness(((event.0 as u16 * 101) >> 8) as u8)
+                        .await?
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
-impl<'a> ComponentClient<'a> {
+#[derive(Debug, Clone)]
+enum LoopEvent {
+    SetBrightness(Saturating<u8>),
+}
+pub struct ComponentClient {
+    component: Component,
+    client: Arc<Mutex<Client>>,
+}
+
+impl ComponentClient {
     pub async fn toggle(&self) -> Result<(), Error> {
-        self.client.toggle(self.component.key.id).await
+        self.client.lock().await.toggle(self.component.key.id).await
     }
     pub async fn set_brightness(&self, brightness: u8) -> Result<(), Error> {
+        let toggle_after = if brightness > 0 && self.component.config.settings.auto_off {
+            Some(self.component.config.settings.auto_off_delay.into())
+        } else {
+            None
+        };
+
         self.client
-            .set(self.component.key.id, None, Some(brightness), None, None)
+            .lock()
             .await
+            .set(
+                self.component.key.id,
+                Some(brightness > 0),
+                Some(brightness),
+                None,
+                toggle_after,
+            )
+            .await
+    }
+    pub async fn set_config(&self, settings: Settings) -> Result<SetConfigResponse, Error> {
+        self.client
+            .lock()
+            .await
+            .set_config(
+                self.component.key.id,
+                Configuration {
+                    id: self.component.key.id,
+                    name: None,
+                    settings,
+                },
+            )
+            .await
+    }
+    pub async fn calibrate(&self) -> Result<(), Error> {
+        let client = self.client.lock().await;
+        client.calibrate(self.component.key.id).await?;
+        while let Some(calibration) = client.get_status(self.component.key.id).await?.calibration {
+            sleep(time::Duration::from_millis(500)).await;
+        }
+        Ok(())
     }
     pub async fn refresh(&mut self) -> Result<(), Error> {
         //self.component.config = self.client.get_config(self.component.key.id).await?;
-        self.component.status = self.client.get_status(self.component.key.id).await?;
+        self.component.status = self
+            .client
+            .lock()
+            .await
+            .get_status(self.component.key.id)
+            .await?;
         Ok(())
     }
 }
 
 mod rpc {
+    use crate::devices::shelly::common::SetConfigResponse;
     use crate::devices::shelly::light::{Configuration, Status};
     use chrono::Duration;
     use jsonrpsee::proc_macros::rpc;
@@ -191,10 +310,18 @@ mod rpc {
             transition_duration: Option<SerializableDurationSeconds>,
             toggle_after: Option<SerializableDurationSeconds>,
         ) -> Result<(), ErrorObjectOwned>;
+        #[method(name = "Light.SetConfig", param_kind=map)]
+        async fn set_config(
+            &self,
+            id: u16,
+            config: Configuration,
+        ) -> Result<SetConfigResponse, ErrorObjectOwned>;
         #[method(name = "Light.GetConfig", param_kind=map)]
         async fn get_config(&self, id: u16) -> Result<Configuration, ErrorObjectOwned>;
         #[method(name = "Light.GetStatus", param_kind=map)]
         async fn get_status(&self, id: u16) -> Result<Status, ErrorObjectOwned>;
+        #[method(name = "Light.Calibrate", param_kind=map)]
+        async fn calibrate(&self, id: u16) -> Result<(), ErrorObjectOwned>;
     }
     #[serde_as]
     #[derive(Serialize, Debug, Clone, PartialEq)]

@@ -5,6 +5,7 @@ use crate::data::registry::{
     TemperatureKey,
 };
 use crate::devices::shelly;
+use crate::devices::shelly::common::DeviceId;
 use serde::{Deserialize, Serialize};
 use strum_macros::EnumIter;
 use tinkerforge_async::base58::Uid;
@@ -74,9 +75,10 @@ pub struct TinkerforgeDevices {
     pub relays: BTreeMap<Uid, RelaySettings>,
     pub temperature_sensors: BTreeMap<Uid, TemperatureSettings>,
 }
-#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, Ord, PartialOrd)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, PartialOrd)]
 pub struct ShellyDevices {
     pub endpoints: Box<[IpAddr]>,
+    pub devices: BTreeMap<DeviceId, ShellyDeviceSettings>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Ord, PartialOrd)]
@@ -156,9 +158,13 @@ pub struct TemperatureSettings {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, PartialOrd, Default)]
 pub struct ShellyDeviceSettings {
-    pub light_registers: BTreeMap<BrightnessKey, shelly::shelly::SwitchingKeyId>,
-    pub lights: BTreeMap<shelly::light::Key, shelly::light::Settings>,
+    pub lights: BTreeMap<shelly::light::Key, ShellyLightSettings>,
     pub switches: BTreeMap<shelly::switch::Key, shelly::switch::Settings>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, PartialOrd)]
+pub struct ShellyLightSettings {
+    pub light_register: BrightnessKey,
+    pub settings: shelly::light::Settings,
 }
 
 #[cfg(test)]
@@ -169,7 +175,8 @@ mod test {
         time::Duration,
     };
 
-    use crate::data::wiring::ShellyDevices;
+    use crate::data::wiring::{ShellyDeviceSettings, ShellyDevices, ShellyLightSettings};
+    use crate::data::Room;
     use crate::{
         data::{
             registry::{BrightnessKey, DualButtonKey, LightColorKey},
@@ -235,6 +242,22 @@ mod test {
             },
             shelly_devices: ShellyDevices {
                 endpoints: Box::new(["10.192.5.6".parse().expect("Cannot parse ip address")]),
+                devices: BTreeMap::from([(
+                    "shellyprodm2pm-08f9e0e720c8".parse().unwrap(),
+                    ShellyDeviceSettings {
+                        lights: BTreeMap::from([(
+                            0.into(),
+                            ShellyLightSettings {
+                                light_register: BrightnessKey::Light(DeviceInRoom {
+                                    room: Room { floor: 2, room: 7 },
+                                    idx: 0,
+                                }),
+                                settings: Default::default(),
+                            },
+                        )]),
+                        switches: Default::default(),
+                    },
+                )]),
             },
         };
         let yaml_data = serde_yaml::to_string(&data).unwrap();

@@ -3,11 +3,11 @@ use jsonrpsee::core::Serialize;
 use macaddr::MacAddr6;
 use serde::{
     de::{Error, Visitor},
-    Deserialize, Deserializer,
+    Deserialize, Deserializer, Serializer,
 };
 use serde_json::Value;
 use serde_with::{formats::Flexible, serde_as, TimestampSeconds};
-use std::fmt::Display;
+use std::fmt::{Display, Write};
 use std::{
     fmt::{Debug, Formatter},
     str::FromStr,
@@ -27,6 +27,8 @@ pub enum LastCommandSource {
     UI,
     #[serde(rename = "timer")]
     Timer,
+    #[serde(rename = "calibration")]
+    Calibration,
     #[serde(rename = "")]
     None,
 }
@@ -119,7 +121,7 @@ pub struct ButtonDoublePush {
     pub brightness: f32,
 }
 
-#[derive(Copy, Clone, Serialize, PartialEq, PartialOrd, Hash, Ord, Eq)]
+#[derive(Copy, Clone, PartialEq, PartialOrd, Hash, Ord, Eq)]
 pub struct DeviceId {
     pub device_type: DeviceType,
     pub mac: MacAddr6,
@@ -138,7 +140,8 @@ impl Debug for DeviceId {
 }
 impl Display for DeviceId {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        self.device_type.fmt(f)?;
+        let device_type = serde_json::to_value(self.device_type).map_err(|e| std::fmt::Error)?;
+        f.write_str(device_type.as_str().ok_or(std::fmt::Error)?)?;
         f.write_str("-")?;
         let bytes = self.mac.into_array();
         f.write_fmt(format_args!(
@@ -177,6 +180,15 @@ impl<'de> Deserialize<'de> for DeviceId {
         D: Deserializer<'de>,
     {
         deserializer.deserialize_str(DeviceIdVisitor)
+    }
+}
+
+impl Serialize for DeviceId {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&self.to_string())
     }
 }
 
@@ -221,4 +233,9 @@ pub enum IPv4Mode {
     Dhcp,
     #[serde(rename = "static")]
     Static,
+}
+
+#[derive(Deserialize, Serialize, Debug, Clone, PartialEq)]
+pub struct SetConfigResponse {
+    restart_required: bool,
 }

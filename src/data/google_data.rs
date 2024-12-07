@@ -1,4 +1,4 @@
-use crate::data::wiring::ShellyDeviceSettings;
+use crate::data::wiring::{ShellyDeviceSettings, ShellyLightSettings};
 use crate::devices::shelly;
 use crate::shelly::common::DeviceId;
 use crate::{
@@ -619,6 +619,7 @@ impl GoogleSheetWireBuilder {
             mut motion_detectors,
             mut heat_controllers,
             mut ring_controllers,
+            mut shelly_devices,
             ..
         } = self;
 
@@ -670,6 +671,7 @@ impl GoogleSheetWireBuilder {
             },
             shelly_devices: ShellyDevices {
                 endpoints: shelly_endpoints.into_boxed_slice(),
+                devices: shelly_devices,
             },
         }
     }
@@ -1053,10 +1055,10 @@ impl GoogleSheetWireBuilder {
 
         let device_ids_of_rooms = HashMap::<_, Vec<_>>::new();
         let device_ids_of_rooms = self
-            .parse_tinkerforge_lights(&context, &mut light_template_map, device_ids_of_rooms)
+            .parse_tinkerforge_lights(context, &light_template_map, device_ids_of_rooms)
             .await?;
         let device_ids_of_rooms = self
-            .parse_shelly_lights(&context, &mut light_template_map, device_ids_of_rooms)
+            .parse_shelly_lights(context, &light_template_map, device_ids_of_rooms)
             .await?;
 
         let light_device_rows = fill_device_idx(|v| self.updates.push(v), device_ids_of_rooms);
@@ -1141,17 +1143,15 @@ impl GoogleSheetWireBuilder {
                             key: shelly::shelly::SwitchingKey::Light(key),
                         }) => {
                             let device_entry = self.shelly_devices.entry(device).or_default();
-                            device_entry.light_registers.insert(
-                                register,
-                                shelly::shelly::SwitchingKeyId {
-                                    device,
-                                    key: shelly::shelly::SwitchingKey::Light(key),
-                                },
-                            );
+                            let name = light_row.name.clone();
                             device_entry.lights.insert(
                                 key,
-                                shelly::light::Settings {
-                                    ..shelly::light::Settings::default()
+                                ShellyLightSettings {
+                                    light_register: register,
+                                    settings: shelly::light::Settings {
+                                        name,
+                                        ..shelly::light::Settings::default()
+                                    },
                                 },
                             );
                         }
@@ -1264,12 +1264,13 @@ impl GoogleSheetWireBuilder {
                 .collect::<Vec<_>>();
 
             for (
-                [room, light_idx, template, address, start_channel, whitebalance, brightness, old_state],
+                [room, light_id, light_idx, template, address, start_channel, whitebalance, brightness, old_state],
                 [buttons, presence_detectors],
             ) in GoogleTable::connect(
                 &context.spreadsheet_methods,
                 [
                     light_config.room_id(),
+                    light_config.light_id(),
                     light_config.light_idx(),
                     light_config.template(),
                     light_config.device_address(),
@@ -1287,6 +1288,7 @@ impl GoogleSheetWireBuilder {
             {
                 if let (
                     Some(room),
+                    Some(light_id),
                     device_id_in_room,
                     Some(light_template),
                     Some(device_address),
@@ -1298,6 +1300,7 @@ impl GoogleSheetWireBuilder {
                     old_state,
                 ) = (
                     room.get_content().map(Room::from_str).and_then(Result::ok),
+                    room.get_content(),
                     DeviceIdxCell(light_idx),
                     template
                         .get_content()
@@ -1329,6 +1332,7 @@ impl GoogleSheetWireBuilder {
                         .entry(room)
                         .or_default()
                         .push(LightRowContent {
+                            name: light_id.to_string().into_boxed_str(),
                             light_template,
                             device_id_in_room,
                             manual_buttons,
@@ -1374,12 +1378,13 @@ impl GoogleSheetWireBuilder {
                 .collect::<Vec<_>>();
 
             for (
-                [room, light_idx, template, device_name_cell, shelly_connector, whitebalance, brightness, old_state],
+                [room, light_id, light_idx, template, device_name_cell, shelly_connector, whitebalance, brightness, old_state],
                 [buttons, presence_detectors],
             ) in GoogleTable::connect(
                 &context.spreadsheet_methods,
                 [
                     light_config.room_id(),
+                    light_config.light_id(),
                     light_config.light_idx(),
                     light_config.template(),
                     light_config.device_name(),
@@ -1397,6 +1402,7 @@ impl GoogleSheetWireBuilder {
             {
                 if let (
                     Some(room),
+                    Some(light_id),
                     device_id_in_room,
                     Some(light_template),
                     Some(actor_id),
@@ -1407,6 +1413,7 @@ impl GoogleSheetWireBuilder {
                     old_state,
                 ) = (
                     room.get_content().map(Room::from_str).and_then(Result::ok),
+                    light_id.get_content(),
                     DeviceIdxCell(light_idx),
                     template
                         .get_content()
@@ -1445,6 +1452,7 @@ impl GoogleSheetWireBuilder {
                         .entry(room)
                         .or_default()
                         .push(LightRowContent {
+                            name: light_id.to_string().into_boxed_str(),
                             light_template,
                             device_id_in_room,
                             manual_buttons,
@@ -2136,6 +2144,7 @@ enum LightEndpoint {
     Shelly(shelly::shelly::SwitchingKeyId),
 }
 struct LightRowContent<'a> {
+    name: Box<str>,
     light_template: LightTemplateTypes,
     device_id_in_room: DeviceIdxCell<'a>,
     endpoint: LightEndpoint,

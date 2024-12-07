@@ -4,7 +4,7 @@ use std::{
 };
 
 use chrono::{DateTime, Local, Timelike};
-use log::error;
+use log::{error, info};
 use serde::{Deserialize, Serialize};
 use tokio::{sync::mpsc::Sender, sync::Mutex, time::sleep};
 use tokio_stream::Stream;

@@ -145,6 +145,7 @@ pub struct GoogleLightData<A> {
     sheet: Box<str>,
     range: Box<str>,
     room_id: Box<str>,
+    light_id: Box<str>,
     light_idx: Box<str>,
     template: Box<str>,
     #[serde(flatten)]
@@ -361,9 +362,9 @@ impl<A> GoogleLightData<A> {
     pub fn room_id(&self) -> &str {
         &self.room_id
     }
-    /*pub fn light_id(&self) -> &str {
+    pub fn light_id(&self) -> &str {
         &self.light_id
-    }*/
+    }
     pub fn light_idx(&self) -> &str {
         &self.light_idx
     }
