@@ -1,15 +1,20 @@
 use macaddr::MacAddr6;
-use serde::de::{Error, Visitor};
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use std::cmp::Ordering;
-use std::fmt::{Display, Formatter, Write};
-use std::marker::PhantomData;
-use std::num::ParseIntError;
-use std::ops::Deref;
-use std::str::FromStr;
+use serde::{
+    de::{Error, Visitor},
+    Deserialize, Deserializer, Serialize, Serializer,
+};
+use std::{
+    cmp::Ordering,
+    fmt::{Display, Formatter},
+    hash::{Hash, Hasher},
+    marker::PhantomData,
+    num::ParseIntError,
+    ops::Deref,
+    str::FromStr,
+};
 use thiserror::Error;
 
-#[derive(Debug, Clone, Hash)]
+#[derive(Debug, Clone)]
 pub struct SerdeStringKey<K: PrefixedKey>(pub K);
 
 #[derive(Debug, Clone, Copy, Ord, PartialOrd, Eq, PartialEq, Hash)]
@@ -30,11 +35,19 @@ impl<K: PrefixedKey + Ord> Ord for SerdeStringKey<K> {
 }
 
 impl<K: Copy + PrefixedKey> Copy for SerdeStringKey<K> {}
+
 impl<K: PartialEq + PrefixedKey> PartialEq for SerdeStringKey<K> {
     fn eq(&self, other: &Self) -> bool {
         self.0.eq(&other.0)
     }
 }
+
+impl<K: Hash + PrefixedKey> Hash for SerdeStringKey<K> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.0.hash(state);
+    }
+}
+
 impl<K: PrefixedKey> Deref for SerdeStringKey<K> {
     type Target = K;
 
@@ -92,7 +105,7 @@ impl<'de, K: PrefixedKey> Deserialize<'de> for SerdeStringKey<K> {
     where
         D: Deserializer<'de>,
     {
-        deserializer.deserialize_str(KeyVisitor(PhantomData::<K>::default()))
+        deserializer.deserialize_str(KeyVisitor(PhantomData::<K>))
     }
 }
 impl<K: PrefixedKey> Serialize for SerdeStringKey<K> {

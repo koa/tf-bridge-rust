@@ -8,7 +8,7 @@ use std::{
 };
 
 use anyhow::Result;
-use image::{io::Reader, GenericImageView, Pixel};
+use image::{GenericImageView, ImageReader, Pixel};
 
 fn generate_icons() -> Result<()> {
     let out_dir = env::var_os("OUT_DIR").unwrap();
@@ -26,7 +26,7 @@ fn generate_icons() -> Result<()> {
             continue;
         }
         let icon_name = &filename[0..filename.len() - 4];
-        let img = Reader::open(dir_entry.path())?.decode()?;
+        let img = ImageReader::open(dir_entry.path())?.decode()?;
         let width = img.width();
         let data_width = (width + 7) / 8 * 8;
         let pixel_count = data_width * img.height();

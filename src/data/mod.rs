@@ -121,9 +121,9 @@ mod test {
             device_idx: 1,
             sub_device_idx: 2,
         };
-        let yaml_string = serde_yaml::to_string(&device_in_room).unwrap();
+        let yaml_string = ron::to_string(&device_in_room).unwrap();
         println!("{}", yaml_string);
-        let parsed: SubDeviceInRoom = serde_yaml::from_str(&yaml_string).unwrap();
+        let parsed: SubDeviceInRoom = ron::from_str(&yaml_string).unwrap();
         println!("Parsed: {parsed:?}");
         assert_eq!(device_in_room, parsed);
     }

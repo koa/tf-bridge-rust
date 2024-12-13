@@ -662,7 +662,7 @@ impl ServerSettings {
         self.setup_file
             .as_ref()
             .map(Box::as_ref)
-            .unwrap_or("setup.yaml")
+            .unwrap_or("setup.ron")
     }
     pub fn state_file(&self) -> &str {
         self.state_file

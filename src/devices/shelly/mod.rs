@@ -18,7 +18,7 @@ use jsonrpsee::{
     },
 };
 use log::{error, info};
-use std::ops::{Deref, DerefMut};
+use std::ops::Deref;
 use std::{
     fmt::{Display, Formatter},
     net::IpAddr,

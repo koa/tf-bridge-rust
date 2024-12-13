@@ -2,10 +2,7 @@ use crate::devices::shelly::{
     ble, bthome, cloud, common::DeviceId, eth, input, knx, light, mqtt, switch, sys, ui, wifi, ws,
 };
 use jsonrpsee::{core::Serialize, proc_macros::rpc};
-use serde::{
-    de::{value::CowStrDeserializer, Error, Visitor},
-    Deserialize, Deserializer,
-};
+use serde::{de::value::CowStrDeserializer, Deserialize};
 use serde_json::value::RawValue;
 use std::{
     borrow::Cow,

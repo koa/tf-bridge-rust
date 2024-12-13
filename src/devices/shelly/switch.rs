@@ -1,12 +1,14 @@
 use chrono::{DateTime, Duration, Utc};
 use jsonrpsee::core::client::{Client, Error};
 use serde::{Deserialize, Serialize};
-use serde_with::{formats::Flexible, serde_as, DurationSeconds, TimestampSeconds};
+use serde_with::{formats::Flexible, serde_as, DefaultOnNull, DurationSeconds, TimestampSeconds};
 
-use crate::devices::shelly::switch::rpc::{SwitchClient as GeneratedSwitchClient, WasOnResponse};
 use crate::{
-    devices::shelly::common::{
-        ActiveEnergy, InitialState, InputMode, LastCommandSource, StatusError, Temperature,
+    devices::shelly::{
+        common::{
+            ActiveEnergy, InitialState, InputMode, LastCommandSource, StatusError, Temperature,
+        },
+        switch::rpc::{SwitchClient as GeneratedSwitchClient, WasOnResponse},
     },
     serde::{PrefixedKey, SerdeStringKey},
 };
@@ -46,13 +48,14 @@ pub struct Status {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, PartialOrd)]
 pub struct Configuration {
     pub id: u16,
-    pub name: Option<Box<str>>,
     #[serde(flatten)]
     pub settings: Settings,
 }
 #[serde_as]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, PartialOrd)]
 pub struct Settings {
+    #[serde_as(deserialize_as = "DefaultOnNull")]
+    pub name: Box<str>,
     pub in_mode: Option<InputMode>,
     pub initial_state: InitialState,
     pub auto_on: bool,
@@ -68,6 +71,27 @@ pub struct Settings {
     pub undervoltage_limit: Option<u16>,
     pub current_limit: Option<f32>,
 }
+
+impl Default for Settings {
+    fn default() -> Self {
+        Settings {
+            name: Default::default(),
+            in_mode: None,
+            initial_state: InitialState::Off,
+            auto_on: false,
+            auto_on_delay: Default::default(),
+            auto_off: false,
+            auto_off_delay: Default::default(),
+            autorecover_voltage_errors: None,
+            input_id: None,
+            power_limit: None,
+            voltage_limit: None,
+            undervoltage_limit: None,
+            current_limit: None,
+        }
+    }
+}
+
 #[derive(Deserialize, Debug, Clone, PartialEq)]
 pub struct StatusTransition {}
 

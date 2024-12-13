@@ -1,17 +1,3 @@
-use std::{error::Error, fmt::Debug, fs::File, future::Future, time::Duration};
-
-use actix_web::{get, App, HttpServer};
-use actix_web_prometheus::PrometheusMetricsBuilder;
-use env_logger::{Env, TimestampPrecision};
-use log::{error, info};
-use tokio::{
-    select,
-    signal::unix::{signal, SignalKind},
-    sync::mpsc::{self, Sender},
-    time::sleep,
-};
-use tokio_stream::{once, wrappers::ReceiverStream, StreamExt};
-
 use crate::{
     controller::{
         action::ring_controller,
@@ -29,6 +15,26 @@ use crate::{
     snapshot::{read_snapshot, write_snapshot},
     terminator::{AbortHandleTerminator, JoinHandleTerminator},
 };
+use actix_web::{get, App, HttpServer};
+use actix_web_prometheus::PrometheusMetricsBuilder;
+use env_logger::{Env, TimestampPrecision};
+use log::{error, info};
+use ron::ser::PrettyConfig;
+use std::{
+    error::Error,
+    fmt::Debug,
+    fs::File,
+    future::Future,
+    io::{Read, Write},
+    time::Duration,
+};
+use tokio::{
+    select,
+    signal::unix::{signal, SignalKind},
+    sync::mpsc::{self, Sender},
+    time::sleep,
+};
+use tokio_stream::{once, wrappers::ReceiverStream, StreamExt};
 
 mod controller;
 mod data;
@@ -325,7 +331,9 @@ async fn fetch_config(
     Ok(
         if let Some(google_data) = match read_sheet_data(current_state).await {
             Ok(data) => {
-                serde_yaml::to_writer(File::create(setup_file)?, &data)?;
+                let output = ron::ser::to_string_pretty(&data, PrettyConfig::default())?;
+                let mut file = File::create(setup_file)?;
+                file.write_all(output.as_bytes())?;
                 data
             }
             Err(error) => {
@@ -335,7 +343,10 @@ async fn fetch_config(
         } {
             google_data
         } else {
-            serde_yaml::from_reader(File::open(setup_file)?)?
+            let mut f = File::open(setup_file)?;
+            let mut string: String = String::new();
+            f.read_to_string(&mut string)?;
+            ron::from_str(&string)?
         },
     )
 }

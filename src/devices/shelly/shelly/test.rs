@@ -1,23 +1,25 @@
-use crate::shelly::wifi;
-use crate::shelly::ws;
 use std::net::{IpAddr, Ipv4Addr};
 
 use chrono::{DateTime, Duration};
 use serde_json::json;
 
-use crate::devices::shelly::common::{IPv4Mode, SslCa};
-use crate::devices::shelly::sys;
 use crate::{
     devices::shelly::{
-        ble, cloud, common,
-        common::{ButtonDoublePush, ButtonPresets, InitialState, InputMode, Temperature},
+        ble, cloud,
+        common::{
+            self, ButtonDoublePush, ButtonPresets, IPv4Mode, InitialState, InputMode, SslCa,
+            Temperature,
+        },
         eth, input, light,
         light::{NightMode, StatusFlags},
         mqtt,
         shelly::{ComponentEntry, GetComponentsResponse},
-        switch,
+        switch, sys,
     },
-    shelly::common::{ActiveEnergy, LastCommandSource},
+    shelly::{
+        common::{ActiveEnergy, LastCommandSource},
+        wifi, ws,
+    },
 };
 
 #[test]
@@ -303,7 +305,6 @@ fn test_light() {
             config,
             light::Configuration {
                 id: 0,
-                name: None,
                 settings: light::Settings {
                     name: Default::default(),
                     in_mode: Some(InputMode::Dim),
@@ -430,8 +431,8 @@ fn test_switch() {
             config,
             switch::Configuration {
                 id: 1,
-                name: None,
                 settings: switch::Settings {
+                    name: Default::default(),
                     in_mode: Some(common::InputMode::Follow),
                     initial_state: common::InitialState::MatchInput,
                     auto_on: false,

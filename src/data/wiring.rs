@@ -159,23 +159,31 @@ pub struct TemperatureSettings {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, PartialOrd, Default)]
 pub struct ShellyDeviceSettings {
     pub lights: BTreeMap<shelly::light::Key, ShellyLightSettings>,
-    pub switches: BTreeMap<shelly::switch::Key, shelly::switch::Settings>,
+    pub switches: BTreeMap<shelly::switch::Key, ShellySwitchSettings>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, PartialOrd)]
 pub struct ShellyLightSettings {
-    pub light_register: BrightnessKey,
+    pub register: ShellyLightRegister,
     pub settings: shelly::light::Settings,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, PartialOrd)]
+pub enum ShellyLightRegister {
+    Dimm(BrightnessKey),
+    Switch(SwitchOutputKey),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, PartialOrd)]
+pub struct ShellySwitchSettings {
+    pub light_register: SwitchOutputKey,
+    pub settings: shelly::switch::Settings,
 }
 
 #[cfg(test)]
 mod test {
-    use std::{
-        collections::BTreeMap,
-        net::{IpAddr, Ipv4Addr},
-        time::Duration,
+    use crate::data::wiring::{
+        ShellyDeviceSettings, ShellyDevices, ShellyLightRegister, ShellyLightSettings,
     };
-
-    use crate::data::wiring::{ShellyDeviceSettings, ShellyDevices, ShellyLightSettings};
     use crate::data::Room;
     use crate::{
         data::{
@@ -187,6 +195,11 @@ mod test {
             DeviceInRoom,
         },
         util::kelvin_2_mireds,
+    };
+    use std::{
+        collections::BTreeMap,
+        net::{IpAddr, Ipv4Addr},
+        time::Duration,
     };
 
     #[test]
@@ -248,10 +261,12 @@ mod test {
                         lights: BTreeMap::from([(
                             0.into(),
                             ShellyLightSettings {
-                                light_register: BrightnessKey::Light(DeviceInRoom {
-                                    room: Room { floor: 2, room: 7 },
-                                    idx: 0,
-                                }),
+                                register: ShellyLightRegister::Dimm(BrightnessKey::Light(
+                                    DeviceInRoom {
+                                        room: Room { floor: 2, room: 7 },
+                                        idx: 0,
+                                    },
+                                )),
                                 settings: Default::default(),
                             },
                         )]),
@@ -260,8 +275,16 @@ mod test {
                 )]),
             },
         };
-        let yaml_data = serde_yaml::to_string(&data).unwrap();
+        let yaml_data = ron::to_string(&data).unwrap();
         println!("{}", yaml_data);
-        assert_eq!(data, serde_yaml::from_str(&yaml_data).unwrap());
+        let result = ron::from_str(&yaml_data);
+        match result {
+            Ok(result) => {
+                assert_eq!(data, result)
+            }
+            Err(e) => {
+                panic!("{}", e);
+            }
+        };
     }
 }

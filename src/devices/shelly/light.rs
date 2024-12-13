@@ -1,5 +1,8 @@
 use crate::{
-    data::{registry::EventRegistry, wiring::ShellyLightSettings},
+    data::{
+        registry::EventRegistry,
+        wiring::{ShellyLightRegister, ShellyLightSettings},
+    },
     devices::shelly::{
         common::{
             ButtonPresets, InitialState, InputMode, LastCommandSource, SetConfigResponse,
@@ -19,13 +22,10 @@ use jsonrpsee::core::{
 };
 use log::{error, info};
 use serde::Deserialize;
-use serde_with::{formats::Flexible, serde_as, DurationSeconds, TimestampSeconds};
-use std::num::Saturating;
-use std::sync::Arc;
-use std::time;
-use tokio::sync::Mutex;
-use tokio::task::JoinHandle;
-use tokio::time::sleep;
+use serde_with::{formats::Flexible, serde_as, DefaultOnNull, DurationSeconds, TimestampSeconds};
+use std::{num::Saturating, sync::Arc, time};
+use tokio::{sync::Mutex, task::JoinHandle, time::sleep};
+use tokio_util::either::Either;
 
 pub type Key = SerdeStringKey<LightKey>;
 
@@ -62,15 +62,13 @@ pub struct Status {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, PartialOrd)]
 pub struct Configuration {
     pub id: u16,
-    pub name: Option<Box<str>>,
     #[serde(flatten)]
     pub settings: Settings,
 }
 #[serde_as]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, PartialOrd)]
 pub struct Settings {
-    #[serde(default)]
-    pub name: Box<str>,
+    pub name: Option<Box<str>>,
     pub in_mode: Option<InputMode>,
     pub initial_state: InitialState,
     pub auto_on: bool,
@@ -206,10 +204,20 @@ impl Component {
         {
             client.calibrate().await?;
         }
-        let mut stream = event_registry
-            .brightness_stream(settings.light_register)
-            .await
-            .map(LoopEvent::SetBrightness);
+        let mut stream = match settings.register {
+            ShellyLightRegister::Dimm(register) => Either::Left(
+                event_registry
+                    .brightness_stream(register)
+                    .await
+                    .map(LoopEvent::SetBrightness),
+            ),
+            ShellyLightRegister::Switch(register) => Either::Right(
+                event_registry
+                    .switch_stream(register)
+                    .await
+                    .map(LoopEvent::Switch),
+            ),
+        };
         while let Some(event) = stream.next().await {
             match event {
                 LoopEvent::SetBrightness(event) => {
@@ -217,6 +225,7 @@ impl Component {
                         .set_brightness(((event.0 as u16 * 101) >> 8) as u8)
                         .await?
                 }
+                LoopEvent::Switch(on) => client.set_brightness(if on { 0 } else { 100 }).await?,
             }
         }
         Ok(())
@@ -226,6 +235,7 @@ impl Component {
 #[derive(Debug, Clone)]
 enum LoopEvent {
     SetBrightness(Saturating<u8>),
+    Switch(bool),
 }
 pub struct ComponentClient {
     component: Component,
@@ -263,7 +273,6 @@ impl ComponentClient {
                 self.component.key.id,
                 Configuration {
                     id: self.component.key.id,
-                    name: None,
                     settings,
                 },
             )

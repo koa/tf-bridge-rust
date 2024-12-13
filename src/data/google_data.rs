@@ -1,6 +1,3 @@
-use crate::data::wiring::{ShellyDeviceSettings, ShellyLightSettings};
-use crate::devices::shelly;
-use crate::shelly::common::DeviceId;
 use crate::{
     data::{
         registry::{
@@ -15,10 +12,13 @@ use crate::{
             ButtonSetting, Controllers, DmxConfigEntry, DmxSettings, DualInputDimmer,
             DualInputSwitch, HeatController, IoSettings, MotionDetector, MotionDetectorSettings,
             Orientation, RelayChannelEntry, RelaySettings, RingController, ScreenSettings,
-            ShellyDevices, TemperatureSettings, TinkerforgeDevices, Wiring,
+            ShellyDeviceSettings, ShellyDevices, ShellyLightRegister, ShellyLightSettings,
+            ShellySwitchSettings, TemperatureSettings, TinkerforgeDevices, Wiring,
         },
         DeviceInRoom, Room, SubDeviceInRoom,
     },
+    devices::shelly,
+    shelly::common::DeviceId,
     util::kelvin_2_mireds,
 };
 use chrono::{format::StrftimeItems, DateTime, Local};
@@ -30,13 +30,8 @@ use google_sheets4::{
     Sheets,
 };
 use log::{debug, error, info};
-use ron::de;
-use serde::de::value::StrDeserializer;
 use serde::Deserialize;
 use serde_json::Value;
-use std::convert::Infallible;
-use std::error::Error;
-use std::iter::Map;
 use std::{
     array,
     borrow::Cow,
@@ -50,7 +45,6 @@ use std::{
 };
 use thiserror::Error;
 use tinkerforge_async::{base58::Uid, ip_connection::Version, DeviceIdentifier};
-use url::quirks::{host, hostname};
 
 #[derive(Error, Debug)]
 pub enum GoogleDataError {
@@ -836,7 +830,7 @@ impl GoogleSheetWireBuilder {
         ).await?.filter_map(|([room, id, idx, orientation, touchscreen, temperature,
         heat_control, whitebalance, brightness, touchscreen_state, temperature_state], _)| {
             if let (Some(room), Some(controller_id), Some(orientation)) = (room.get_content().map(Room::from_str)
-                                                                               .and_then(Result::ok), id.get_content(), orientation.get_content().map(|v| Orientation::deserialize(serde_yaml::Value::String(v.to_string())))
+                                                                               .and_then(Result::ok), id.get_content(), orientation.get_content().map(|v| Orientation::deserialize(serde_json::Value::String(v.to_string())))
                                                                                .and_then(Result::ok)) {
                 Some((room, controller_id.to_string().into_boxed_str(), DeviceIdxCell(idx), orientation,
                       touchscreen.get_content().map(Uid::from_str).and_then(Result::ok),
@@ -1103,8 +1097,35 @@ impl GoogleSheetWireBuilder {
                                 channel: bus_start_address,
                             });
                         }
-                        LightEndpoint::Shelly(_) => {
-                            todo!()
+                        LightEndpoint::Shelly(shelly::shelly::SwitchingKeyId { device, key }) => {
+                            let device_entry = self.shelly_devices.entry(device).or_default();
+                            let name = light_row.name.clone();
+                            match key {
+                                shelly::shelly::SwitchingKey::Switch(key) => {
+                                    device_entry.switches.insert(
+                                        key,
+                                        ShellySwitchSettings {
+                                            light_register: register,
+                                            settings: shelly::switch::Settings {
+                                                name,
+                                                ..Default::default()
+                                            },
+                                        },
+                                    );
+                                }
+                                shelly::shelly::SwitchingKey::Light(key) => {
+                                    device_entry.lights.insert(
+                                        key,
+                                        ShellyLightSettings {
+                                            register: ShellyLightRegister::Switch(register),
+                                            settings: shelly::light::Settings {
+                                                name: Some(name),
+                                                ..Default::default()
+                                            },
+                                        },
+                                    );
+                                }
+                            }
                         }
                     }
                     if manual_buttons.is_empty() {
@@ -1147,9 +1168,9 @@ impl GoogleSheetWireBuilder {
                             device_entry.lights.insert(
                                 key,
                                 ShellyLightSettings {
-                                    light_register: register,
+                                    register: ShellyLightRegister::Dimm(register),
                                     settings: shelly::light::Settings {
-                                        name,
+                                        name: Some(name),
                                         ..shelly::light::Settings::default()
                                     },
                                 },
@@ -2160,10 +2181,10 @@ impl<'a> DeviceIdxAccessNew<'a> for LightRowContent<'a> {
 }
 #[cfg(test)]
 mod test {
+    use crate::data::google_data::{read_sheet_data, CellCoordinates};
     use env_logger::Env;
     use log::{error, info};
-
-    use crate::data::google_data::{read_sheet_data, CellCoordinates};
+    use ron::ser::PrettyConfig;
 
     #[test]
     fn format_coordinates() {
@@ -2187,7 +2208,10 @@ mod test {
         let result = read_sheet_data(None).await;
         match result {
             Ok(Some(wiring)) => {
-                info!("Loaded data: \n{}", serde_yaml::to_string(&wiring).unwrap());
+                info!(
+                    "Loaded data: \n{}",
+                    ron::ser::to_string_pretty(&wiring, PrettyConfig::default()).unwrap()
+                );
             }
             Err(error) => {
                 error!("Error loading data: {error}");
