@@ -172,15 +172,15 @@ impl Component {
         event_registry: EventRegistry,
     ) -> JoinHandle<()> {
         let client = client.clone();
-        let light = self.clone();
         let settings = settings.clone();
+        let id = self.key.id;
         tokio::spawn(async move {
-            match light.run_loop(client, settings, event_registry).await {
+            match self.run_loop(client, settings, event_registry).await {
                 Ok(()) => {
                     info!("Light Terminated")
                 }
                 Err(e) => {
-                    error!("Light {} failed: {}", self.key.id, e)
+                    error!("Light {id} failed: {}", e)
                 }
             }
         })
@@ -244,7 +244,11 @@ pub struct ComponentClient {
 
 impl ComponentClient {
     pub async fn toggle(&self) -> Result<(), Error> {
-        self.client.lock().await.toggle(self.component.key.id).await
+        self.client
+            .lock()
+            .await
+            .toggle_light(self.component.key.id)
+            .await
     }
     pub async fn set_brightness(&self, brightness: u8) -> Result<(), Error> {
         let toggle_after = if brightness > 0 && self.component.config.settings.auto_off {
@@ -269,7 +273,7 @@ impl ComponentClient {
         self.client
             .lock()
             .await
-            .set_config(
+            .set_light_config(
                 self.component.key.id,
                 Configuration {
                     id: self.component.key.id,
@@ -280,8 +284,12 @@ impl ComponentClient {
     }
     pub async fn calibrate(&self) -> Result<(), Error> {
         let client = self.client.lock().await;
-        client.calibrate(self.component.key.id).await?;
-        while let Some(calibration) = client.get_status(self.component.key.id).await?.calibration {
+        client.calibrate_light(self.component.key.id).await?;
+        while let Some(calibration) = client
+            .get_light_status(self.component.key.id)
+            .await?
+            .calibration
+        {
             sleep(time::Duration::from_millis(500)).await;
         }
         Ok(())
@@ -292,7 +300,7 @@ impl ComponentClient {
             .client
             .lock()
             .await
-            .get_status(self.component.key.id)
+            .get_light_status(self.component.key.id)
             .await?;
         Ok(())
     }
@@ -309,7 +317,7 @@ mod rpc {
     #[rpc(client)]
     pub trait Light {
         #[method(name = "Light.Toggle", param_kind=map)]
-        async fn toggle(&self, id: u16) -> Result<(), ErrorObjectOwned>;
+        async fn toggle_light(&self, id: u16) -> Result<(), ErrorObjectOwned>;
         #[method(name = "Light.Set", param_kind=map)]
         async fn set(
             &self,
@@ -320,17 +328,17 @@ mod rpc {
             toggle_after: Option<SerializableDurationSeconds>,
         ) -> Result<(), ErrorObjectOwned>;
         #[method(name = "Light.SetConfig", param_kind=map)]
-        async fn set_config(
+        async fn set_light_config(
             &self,
             id: u16,
             config: Configuration,
         ) -> Result<SetConfigResponse, ErrorObjectOwned>;
         #[method(name = "Light.GetConfig", param_kind=map)]
-        async fn get_config(&self, id: u16) -> Result<Configuration, ErrorObjectOwned>;
+        async fn get_light_config(&self, id: u16) -> Result<Configuration, ErrorObjectOwned>;
         #[method(name = "Light.GetStatus", param_kind=map)]
-        async fn get_status(&self, id: u16) -> Result<Status, ErrorObjectOwned>;
+        async fn get_light_status(&self, id: u16) -> Result<Status, ErrorObjectOwned>;
         #[method(name = "Light.Calibrate", param_kind=map)]
-        async fn calibrate(&self, id: u16) -> Result<(), ErrorObjectOwned>;
+        async fn calibrate_light(&self, id: u16) -> Result<(), ErrorObjectOwned>;
     }
     #[serde_as]
     #[derive(Serialize, Debug, Clone, PartialEq)]

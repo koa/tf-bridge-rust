@@ -252,15 +252,15 @@ async fn run_enumeration_listener(
             ComponentEntry::Mqtt(_) => {}
             ComponentEntry::Switch(switch) => {
                 info!("Switch: {}", switch.key.id);
-
-                switch
-                    .set(
-                        client.lock().await.deref(),
-                        true,
-                        Some(chrono::Duration::seconds(2)),
-                    )
-                    .await
-                    .map_err(enrich_error(addr))?;
+                let id = ComponentKey::Switch(switch.key);
+                let found_switch_config =
+                    configured_device.and_then(|d| d.switches.get(&switch.key));
+                if let Some(switch_config) = found_switch_config {
+                    let handle = switch.run(&client, switch_config, event_registry.clone());
+                    running_components.insert(id, handle);
+                } else {
+                    running_components.remove(&id);
+                }
             }
             ComponentEntry::Sys(_) => {}
             ComponentEntry::Wifi(mut wifi) => {

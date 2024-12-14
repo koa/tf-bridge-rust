@@ -1099,13 +1099,13 @@ impl GoogleSheetWireBuilder {
                         }
                         LightEndpoint::Shelly(shelly::shelly::SwitchingKeyId { device, key }) => {
                             let device_entry = self.shelly_devices.entry(device).or_default();
-                            let name = light_row.name.clone();
+                            let name = Some(light_row.name.clone());
                             match key {
                                 shelly::shelly::SwitchingKey::Switch(key) => {
                                     device_entry.switches.insert(
                                         key,
                                         ShellySwitchSettings {
-                                            light_register: register,
+                                            register,
                                             settings: shelly::switch::Settings {
                                                 name,
                                                 ..Default::default()
@@ -1119,7 +1119,7 @@ impl GoogleSheetWireBuilder {
                                         ShellyLightSettings {
                                             register: ShellyLightRegister::Switch(register),
                                             settings: shelly::light::Settings {
-                                                name: Some(name),
+                                                name,
                                                 ..Default::default()
                                             },
                                         },

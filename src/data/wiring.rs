@@ -175,7 +175,7 @@ pub enum ShellyLightRegister {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, PartialOrd)]
 pub struct ShellySwitchSettings {
-    pub light_register: SwitchOutputKey,
+    pub register: SwitchOutputKey,
     pub settings: shelly::switch::Settings,
 }
 

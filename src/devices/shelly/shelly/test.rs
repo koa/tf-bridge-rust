@@ -433,7 +433,7 @@ fn test_switch() {
                 id: 1,
                 settings: switch::Settings {
                     name: Default::default(),
-                    in_mode: Some(common::InputMode::Follow),
+                    in_mode: common::InputMode::Follow,
                     initial_state: common::InitialState::MatchInput,
                     auto_on: false,
                     auto_on_delay: Duration::seconds(60),

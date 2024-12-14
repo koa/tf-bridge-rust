@@ -1,8 +1,7 @@
-use chrono::{DateTime, Duration, Utc};
-use jsonrpsee::core::client::{Client, Error};
-use serde::{Deserialize, Serialize};
-use serde_with::{formats::Flexible, serde_as, DefaultOnNull, DurationSeconds, TimestampSeconds};
-
+use crate::data::registry::EventRegistry;
+use crate::data::wiring::ShellySwitchSettings;
+use crate::devices::shelly::common::SetConfigResponse;
+use crate::devices::shelly::ShellyError;
 use crate::{
     devices::shelly::{
         common::{
@@ -12,6 +11,17 @@ use crate::{
     },
     serde::{PrefixedKey, SerdeStringKey},
 };
+use chrono::{DateTime, Duration, Utc};
+use config::Case::Toggle;
+use futures::StreamExt;
+use jsonrpsee::core::client::{Client, Error};
+use log::{error, info};
+use serde::{Deserialize, Serialize};
+use serde_with::{formats::Flexible, serde_as, DefaultOnNull, DurationSeconds, TimestampSeconds};
+use std::num::Saturating;
+use std::sync::Arc;
+use tokio::sync::Mutex;
+use tokio::task::JoinHandle;
 
 pub type Key = SerdeStringKey<SwitchKey>;
 
@@ -21,6 +31,7 @@ pub struct Component {
     pub status: Status,
     pub config: Configuration,
 }
+
 #[serde_as]
 #[derive(Deserialize, Debug, Clone, PartialEq)]
 pub struct Status {
@@ -54,9 +65,8 @@ pub struct Configuration {
 #[serde_as]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, PartialOrd)]
 pub struct Settings {
-    #[serde_as(deserialize_as = "DefaultOnNull")]
-    pub name: Box<str>,
-    pub in_mode: Option<InputMode>,
+    pub name: Option<Box<str>>,
+    pub in_mode: InputMode,
     pub initial_state: InitialState,
     pub auto_on: bool,
     #[serde_as(as = "DurationSeconds<String, Flexible>")]
@@ -76,12 +86,12 @@ impl Default for Settings {
     fn default() -> Self {
         Settings {
             name: Default::default(),
-            in_mode: None,
+            in_mode: InputMode::Detached,
             initial_state: InitialState::Off,
             auto_on: false,
-            auto_on_delay: Default::default(),
+            auto_on_delay: Duration::hours(2),
             auto_off: false,
-            auto_off_delay: Default::default(),
+            auto_off_delay: Duration::hours(2),
             autorecover_voltage_errors: None,
             input_id: None,
             power_limit: None,
@@ -99,8 +109,18 @@ pub struct StatusTransition {}
 pub struct SwitchKey {
     pub id: u16,
 }
+pub struct ComponentClient {
+    component: Component,
+    client: Arc<Mutex<Client>>,
+}
 
 impl Component {
+    pub fn client(self, client: Arc<Mutex<Client>>) -> ComponentClient {
+        ComponentClient {
+            component: self,
+            client,
+        }
+    }
     pub async fn toggle(&self, client: &Client) -> Result<WasOnResponse, Error> {
         client.toggle(self.key.id).await
     }
@@ -114,8 +134,87 @@ impl Component {
             .set(self.key.id, on, toggle_after.map(|d| d.into()))
             .await
     }
+    pub fn run(
+        self,
+        client: &Arc<Mutex<Client>>,
+        settings: &ShellySwitchSettings,
+        event_registry: EventRegistry,
+    ) -> JoinHandle<()> {
+        let client = client.clone();
+        let settings = settings.clone();
+        let id = self.key.id;
+        tokio::spawn(async move {
+            match self.run_loop(client, settings, event_registry).await {
+                Ok(()) => {
+                    info!("Switch Terminated")
+                }
+                Err(e) => {
+                    error!("Switch {id} failed: {}", e)
+                }
+            }
+        })
+    }
+    async fn run_loop(
+        self,
+        client: Arc<Mutex<Client>>,
+        settings: ShellySwitchSettings,
+        event_registry: EventRegistry,
+    ) -> Result<(), ShellyError> {
+        let new_settings = &settings.settings;
+        let client = self.client(client.clone());
+        if new_settings != &client.component.config.settings {
+            info!("Switching to {new_settings:#?}");
+            client.set_config(new_settings.clone()).await?;
+        };
+        let mut stream = event_registry
+            .switch_stream(settings.register)
+            .await
+            .map(LoopEvent::Switch);
+        while let Some(event) = stream.next().await {
+            match event {
+                LoopEvent::Switch(on) => {
+                    client.set_on(on).await?;
+                }
+            }
+        }
+        Ok(())
+    }
+}
+impl ComponentClient {
+    pub async fn set_config(&self, settings: Settings) -> Result<SetConfigResponse, Error> {
+        self.client
+            .lock()
+            .await
+            .set_switch_config(
+                self.component.key.id,
+                Configuration {
+                    id: self.component.key.id,
+                    settings,
+                },
+            )
+            .await
+    }
+    pub async fn set_on(&self, on: bool) -> Result<(), Error> {
+        let toggle = if on && self.component.config.settings.auto_off {
+            Some(self.component.config.settings.auto_off_delay.into())
+        } else if !on && self.component.config.settings.auto_on {
+            Some(self.component.config.settings.auto_on_delay.into())
+        } else {
+            None
+        };
+        self.client
+            .lock()
+            .await
+            .set(self.component.key.id, on, toggle)
+            .await
+            .map(|_| ())
+    }
 }
 
+#[derive(Debug, Clone)]
+enum LoopEvent {
+    Switch(bool),
+}
 impl From<u16> for SwitchKey {
     fn from(value: u16) -> Self {
         SwitchKey { id: value }
@@ -134,6 +233,8 @@ impl PrefixedKey for SwitchKey {
 }
 
 mod rpc {
+    use super::*;
+    use crate::devices::shelly::common::SetConfigResponse;
     use chrono::Duration;
     use jsonrpsee::proc_macros::rpc;
     use serde::{Deserialize, Serialize};
@@ -150,6 +251,12 @@ mod rpc {
             on: bool,
             toggle_after: Option<ToggleAfter>,
         ) -> Result<WasOnResponse, ErrorObjectOwned>;
+        #[method(name = "Switch.SetConfig", param_kind=map)]
+        async fn set_switch_config(
+            &self,
+            id: u16,
+            config: Configuration,
+        ) -> Result<SetConfigResponse, ErrorObjectOwned>;
     }
     #[serde_as]
     #[derive(Serialize, Debug, Clone, PartialEq)]
