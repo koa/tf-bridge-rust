@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::hash::Hash;
 use tokio::task::JoinHandle;
 
+pub mod modbus;
 pub mod shelly;
 pub mod tinkerforge;
 

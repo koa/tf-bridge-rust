@@ -3114,6 +3114,7 @@ dependencies = [
  "thiserror 1.0.69",
  "tinkerforge-async",
  "tokio",
+ "tokio-modbus",
  "tokio-stream",
  "tokio-util",
  "url 2.5.4",
@@ -3317,6 +3318,24 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
+]
+
+[[package]]
+name = "tokio-modbus"
+version = "0.16.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bdd5def942f13ebaebe636834026213ad9501e1cbd77687545cc08af4febd8a8"
+dependencies = [
+ "async-trait",
+ "byteorder",
+ "bytes",
+ "futures-core",
+ "futures-util",
+ "log",
+ "smallvec",
+ "thiserror 2.0.4",
+ "tokio",
+ "tokio-util",
 ]
 
 [[package]]

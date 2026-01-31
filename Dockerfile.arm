@@ -7,4 +7,4 @@ FROM scratch as target
 COPY --from=rust /etc/ssl /etc/ssl
 COPY --from=rust /build/target/arm-unknown-linux-musleabihf/release/tf_bridge_rust /
 EXPOSE 8080/tcp
-ENTRYPOINT ["/tf_bridge_rust"]
+ENTRYPOINT ["tf_bridge_rust"]

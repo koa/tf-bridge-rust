@@ -35,6 +35,7 @@ google-sheets4 = "5.0"
 ron = "0.8"
 macaddr = { version = "1.0.1", features = ["serde"] }
 semver = { version = "1.0.23", features = ["serde"] }
+tokio-modbus = { version = "0.16.1", features = ["tcp"] }
 
 [build-dependencies]
 image = "0.25"
