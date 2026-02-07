@@ -6,8 +6,8 @@ use std::{
 };
 
 use tinkerforge_async::base58::Uid;
-use tinkerforge_async::DeviceIdentifier;
 use tinkerforge_async::ip_connection::Version;
+use tinkerforge_async::DeviceIdentifier;
 
 #[derive(Default, Debug)]
 pub struct State {

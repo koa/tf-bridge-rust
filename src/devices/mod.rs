@@ -4,7 +4,6 @@ use log::{error, info};
 use thiserror::Error;
 use tinkerforge_async::{
     base58::Uid,
-    DeviceIdentifier,
     dmx::DmxBricklet,
     error::TinkerforgeError,
     industrial_quad_relay_v_2::IndustrialQuadRelayV2Bricklet,
@@ -14,6 +13,7 @@ use tinkerforge_async::{
     lcd_128_x_64::Lcd128X64Bricklet,
     motion_detector_v_2::MotionDetectorV2Bricklet,
     temperature_v_2::TemperatureV2Bricklet,
+    DeviceIdentifier,
 };
 use tokio::{
     pin,
@@ -21,10 +21,7 @@ use tokio::{
     task,
     time::{interval, sleep},
 };
-use tokio_stream::{
-    StreamExt,
-    wrappers::IntervalStream,
-};
+use tokio_stream::{wrappers::IntervalStream, StreamExt};
 
 use crate::{
     data::{
@@ -51,7 +48,7 @@ pub mod screen_data_renderer;
 pub mod temperature;
 
 fn do_activate_devices(
-    endpoints: impl Iterator<Item=(IpAddr, u16)>,
+    endpoints: impl Iterator<Item = (IpAddr, u16)>,
     event_registry: &EventRegistry,
     running_connections: &mut Vec<TestamentSender>,
     devices: Arc<TinkerforgeDevices>,
@@ -172,7 +169,7 @@ async fn run_enumeration_listener(
                         }
 
                         info!("Registered: {uid}");
-                        if let Some(device_identifier) = paket.device_identifier.parsed() {
+                        if let Ok(device_identifier) = paket.device_identifier.try_into() {
                             status_updater
                                 .send(StateUpdateMessage::BrickletConnected {
                                     uid,
@@ -197,7 +194,7 @@ async fn run_enumeration_listener(
                                             event_registry.clone(),
                                             *screen_settings,
                                         )
-                                            .await;
+                                        .await;
                                         register_handle(&mut registered_devices, uid, sender).await;
                                     } else {
                                         info!("Found unused LCD Device {} on {addr:?}", uid);
@@ -205,7 +202,7 @@ async fn run_enumeration_listener(
                                             Lcd128X64Bricklet::new(uid, ipcon.clone()),
                                             &format!("UID: {uid}"),
                                         )
-                                            .await
+                                        .await
                                         {
                                             error!("Cannot access device {uid}: {error}");
                                         }
@@ -223,9 +220,9 @@ async fn run_enumeration_listener(
                                                 event_registry.clone(),
                                                 &settings.entries,
                                             )
-                                                .await,
+                                            .await,
                                         )
-                                            .await;
+                                        .await;
                                     } else {
                                         info!("Found unused DMX Bricklet {uid} on {addr:?}");
                                     }
@@ -242,9 +239,9 @@ async fn run_enumeration_listener(
                                                 event_registry.clone(),
                                                 &settings.entries,
                                             )
-                                                .await,
+                                            .await,
                                         )
-                                            .await;
+                                        .await;
                                     } else {
                                         info!("Found unused IO16 Device {uid} on {addr:?}");
                                     }
@@ -261,9 +258,9 @@ async fn run_enumeration_listener(
                                                 event_registry.clone(),
                                                 &settings.entries,
                                             )
-                                                .await,
+                                            .await,
                                         )
-                                            .await;
+                                        .await;
                                     } else {
                                         info!("Found unused IO16 v2 Device {uid} on {addr:?}");
                                     }
@@ -281,7 +278,7 @@ async fn run_enumeration_listener(
                                                 settings.output,
                                             ),
                                         )
-                                            .await;
+                                        .await;
                                     } else {
                                         info!("Found unused Motion detector {uid} on {addr:?}");
                                     }
@@ -299,7 +296,7 @@ async fn run_enumeration_listener(
                                                 settings.output,
                                             ),
                                         )
-                                            .await;
+                                        .await;
                                     } else {
                                         info!("Found unused Temperature Sensor {uid} on {addr:?}");
                                     }
@@ -311,15 +308,15 @@ async fn run_enumeration_listener(
                                             uid,
                                             handle_quad_relay(
                                                 IndustrialQuadRelayV2Bricklet::new(
-                                                    uid.into(),
+                                                    uid,
                                                     ipcon.clone(),
                                                 ),
                                                 &event_registry,
                                                 &settings.entries,
                                             )
-                                                .await,
+                                            .await,
                                         )
-                                            .await;
+                                        .await;
                                     } else {
                                         info!("Found unused Relay Bricklet {uid} on {addr:?}");
                                     }
@@ -395,7 +392,7 @@ fn start_enumeration_listener(
                 testament_stream.clone(),
                 status_updater.clone(),
             )
-                .await
+            .await
             {
                 Ok(_) => {
                     info!("{socket_str}: Finished");

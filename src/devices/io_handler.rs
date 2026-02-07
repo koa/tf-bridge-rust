@@ -14,7 +14,7 @@ use tinkerforge_async::{
     io_16_v_2::{Io16V2Bricklet, SetInputValueCallbackConfigurationRequest},
 };
 use tokio::{sync::mpsc, task::JoinHandle, time::sleep};
-use tokio_stream::{empty, StreamExt, wrappers::ReceiverStream};
+use tokio_stream::{empty, wrappers::ReceiverStream, StreamExt};
 use tokio_util::either::Either;
 
 use crate::{
@@ -238,7 +238,7 @@ async fn io_16_v2_loop(
 async fn io_16_loop(
     termination_receiver: LifeLineEnd,
     channel_settings: [ChannelSetting; 16],
-    button_event_stream: impl Stream<Item=IoMessage> + Sized + Unpin,
+    button_event_stream: impl Stream<Item = IoMessage> + Sized + Unpin,
 ) -> Result<(), IoHandlerError> {
     let (rx, tx) = mpsc::channel(2);
     let mut channel_timer: [Option<JoinHandle<()>>; 16] = <[Option<JoinHandle<()>>; 16]>::default();

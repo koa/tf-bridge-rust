@@ -5,12 +5,11 @@ use embedded_graphics::{
     Pixel,
 };
 use strum_macros::EnumIter;
-use sub_array::SubArray;
 use tinkerforge_async::error::TinkerforgeError;
 use tinkerforge_async::lcd_128_x_64::{
     Lcd128X64Bricklet, SetDisplayConfigurationRequest,
     SetTouchPositionCallbackConfigurationRequest, TouchLedConfig, TouchPositionCallback,
-    WritePixelsLowLevelRequest,
+    WritePixelsRequest,
 };
 use tokio_stream::{Stream, StreamExt};
 
@@ -82,55 +81,34 @@ impl Lcd128x64BrickletDisplay {
         self.bricklet
             .set_touch_led_config(TouchLedConfig::Off)
             .await?;
-        let mut current_pos = 0;
-        let pixel_count = self.current_image.len();
-        while current_pos < pixel_count {
-            //println!("Scan from {current_pos}");
-            while current_pos < pixel_count
-                && self.current_image[current_pos..current_pos + 64]
-                    == self.pending_image.data[current_pos..current_pos + 64]
+        //let mut current_pos = 0;
+        //let pixel_count = self.current_image.len();
+        let mut y_start = None;
+        let mut y_end = None;
+        for y in 0u8..64 {
+            let start_pos = y as usize * 128;
+            let end_pos = (y as usize + 1) * 128;
+            if self.current_image[start_pos..end_pos] != self.pending_image.data[start_pos..end_pos]
             {
-                current_pos += 64;
-            }
-            if current_pos >= TOTAL_PIXEL_COUNT {
-                break;
-            }
-            //println!("Paint from {current_pos}");
-            let remaining_pixels = TOTAL_PIXEL_COUNT - current_pos;
-            if remaining_pixels > PIXEL_PER_PAKET as usize {
-                let until_offset = current_pos as u16 + PIXEL_PER_PAKET;
-                let data_chunk = self.pending_image.data.sub_array_ref(current_pos);
-                self.bricklet
-                    .write_pixels_low_level(WritePixelsLowLevelRequest {
-                        x_start: 0,
-                        y_start: 0,
-                        x_end: 127,
-                        y_end: 63,
-                        pixels_length: until_offset,
-                        pixels_chunk_offset: current_pos as u16,
-                        pixels_chunk_data: *data_chunk,
-                    })
-                    .await?;
-                self.current_image[current_pos..current_pos + PIXEL_PER_PAKET as usize]
-                    .copy_from_slice(data_chunk);
-            } else {
-                let mut temp_array = [false; PIXEL_PER_PAKET as usize];
-                let data_chunk = &self.pending_image.data[current_pos..TOTAL_PIXEL_COUNT];
-                temp_array[0..remaining_pixels].copy_from_slice(data_chunk);
-                self.bricklet
-                    .write_pixels_low_level(WritePixelsLowLevelRequest {
-                        x_start: 0,
-                        y_start: 0,
-                        x_end: 127,
-                        y_end: 63,
-                        pixels_length: TOTAL_PIXEL_COUNT as u16,
-                        pixels_chunk_offset: current_pos as u16,
-                        pixels_chunk_data: temp_array,
-                    })
-                    .await?;
-                self.current_image[current_pos..TOTAL_PIXEL_COUNT].copy_from_slice(data_chunk);
-            }
-            current_pos += PIXEL_PER_PAKET as usize;
+                if y_start.is_none() {
+                    y_start = Some(y);
+                }
+                y_end = Some(y);
+            };
+        }
+        if let (Some(y_start), Some(y_end)) = (y_start, y_end) {
+            //info!("Writing pixels from y={} to y={}", y_start, y_end);
+            self.bricklet
+                .write_pixels(WritePixelsRequest {
+                    x_start: 0,
+                    y_start,
+                    x_end: 127,
+                    y_end,
+                    data: &self.pending_image.data
+                        [y_start as usize * 128..(y_end as usize + 1) * 128],
+                })
+                .await?;
+            self.current_image = self.pending_image.data.clone();
         }
         self.bricklet.draw_buffered_frame(false).await?;
         self.bricklet

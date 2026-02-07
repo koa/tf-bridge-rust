@@ -91,7 +91,7 @@ google-sheet:
     state: Status Dev
   available_bricklets:
     sheet: Verfügbare Geräte Dev
-    range: A:M
+    range: A:O
     endpoint: Endpoint
     master_id: Master Brick
     uid: Adresse

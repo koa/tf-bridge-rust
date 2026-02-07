@@ -1,4 +1,4 @@
-use futures::{Stream, stream::SelectAll};
+use futures::{stream::SelectAll, Stream};
 use log::error;
 use thiserror::Error;
 use tinkerforge_async::{
@@ -10,7 +10,7 @@ use tokio::{
     task::JoinHandle,
     time::sleep,
 };
-use tokio_stream::{StreamExt, wrappers::ReceiverStream};
+use tokio_stream::{wrappers::ReceiverStream, StreamExt};
 
 use crate::{
     data::{registry::EventRegistry, state::StateUpdateMessage, wiring::RelayChannelEntry},
@@ -61,7 +61,7 @@ enum RelayError {
 
 async fn quad_relay_task(
     mut bricklet: IndustrialQuadRelayV2Bricklet,
-    input_stream: impl Stream<Item=RelayMsg> + Unpin,
+    input_stream: impl Stream<Item = RelayMsg> + Unpin,
 ) -> Result<(), RelayError> {
     let (tx, rx) = mpsc::channel(2);
     let mut stream = input_stream.merge(ReceiverStream::new(rx));

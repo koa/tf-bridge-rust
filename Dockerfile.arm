@@ -1,4 +1,4 @@
-FROM --platform=$BUILDPLATFORM ghcr.io/koa/rust-cross-compile:0.0.3 as rust
+FROM --platform=$BUILDPLATFORM ghcr.io/koa/rust-cross-compile:0.0.5 as rust
 ADD . /build/
 WORKDIR /build
 RUN apt -y install python3-dev

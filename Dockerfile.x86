@@ -1,6 +1,7 @@
-FROM ghcr.io/koa/rust-cross-compile:0.0.3 as rust
+FROM ghcr.io/koa/rust-cross-compile:0.0.5 as rust
 ADD . /build/
 WORKDIR /build
+#RUN rm -r /root/.rustup
 RUN cargo build --release --target x86_64-unknown-linux-musl
 FROM scratch as target
 COPY --from=rust /etc/ssl /etc/ssl

@@ -2,11 +2,10 @@ use std::num::Saturating;
 
 use futures::stream::SelectAll;
 use log::{error, info};
-use sub_array::SubArray;
 use thiserror::Error;
 use tinkerforge_async::{
     base58::Base58Error,
-    dmx::{DmxBricklet, DmxMode, SetFrameCallbackConfigRequest, WriteFrameLowLevelRequest},
+    dmx::{DmxBricklet, DmxMode, SetFrameCallbackConfigRequest, WriteFrameRequest},
     error::TinkerforgeError,
 };
 use tokio::sync::mpsc;
@@ -142,7 +141,7 @@ enum DimmColorUpdate {
     Color(Saturating<u16>),
 }
 
-const DMX_PAKET_SIZE: u16 = 60;
+//const DMX_PAKET_SIZE: u16 = 60;
 
 #[derive(Debug, Error)]
 enum DmxError {
@@ -154,7 +153,7 @@ enum DmxError {
     Send(#[from] mpsc::error::SendError<StateUpdateMessage>),
 }
 
-async fn dmx_loop<St: Stream<Item=DmxCommand> + Unpin>(
+async fn dmx_loop<St: Stream<Item = DmxCommand> + Unpin>(
     mut bricklet: DmxBricklet,
     mut stream: St,
 ) -> Result<(), DmxError> {
@@ -179,12 +178,9 @@ async fn dmx_loop<St: Stream<Item=DmxCommand> + Unpin>(
                         continue;
                     }
                     *entry = value;
-                    let offset = channel - (channel % DMX_PAKET_SIZE);
                     bricklet
-                        .write_frame_low_level(WriteFrameLowLevelRequest {
-                            frame_length: DMX_PAKET_SIZE,
-                            frame_chunk_offset: offset,
-                            frame_chunk_data: *channel_values.sub_array_ref(offset as usize),
+                        .write_frame(WriteFrameRequest {
+                            data: &channel_values[0..=channel as usize],
                         })
                         .await?;
                 }
@@ -195,79 +191,30 @@ async fn dmx_loop<St: Stream<Item=DmxCommand> + Unpin>(
                 higher_channel,
                 higher_value,
             } => {
-                let lower_changed =
-                    if let Some(entry) = channel_values.get_mut(lower_channel as usize) {
-                        if *entry != lower_value {
-                            *entry = lower_value;
-                            true
-                        } else {
-                            false
-                        }
-                    } else {
-                        false
-                    };
-                let higher_changed =
-                    if let Some(entry) = channel_values.get_mut(higher_channel as usize) {
-                        if *entry != higher_value {
-                            *entry = higher_value;
-                            true
-                        } else {
-                            false
-                        }
-                    } else {
-                        false
-                    };
-                match match (lower_changed, higher_changed) {
-                    (false, false) => None,
-                    (true, false) => Some((lower_channel, None)),
-                    (false, true) => Some((higher_channel, None)),
-                    (true, true) => Some((lower_channel, Some(higher_channel))),
-                } {
-                    None => {}
-                    Some((channel, None)) => {
-                        let offset = channel - (channel % DMX_PAKET_SIZE);
-                        bricklet
-                            .write_frame_low_level(WriteFrameLowLevelRequest {
-                                frame_length: DMX_PAKET_SIZE,
-                                frame_chunk_offset: offset,
-                                frame_chunk_data: *channel_values.sub_array_ref(offset as usize),
-                            })
-                            .await?;
-                    }
-                    Some((lower_channel, Some(upper_channel))) => {
-                        let span = upper_channel - lower_channel;
-                        if span < DMX_PAKET_SIZE {
-                            let offset = (Saturating(upper_channel) - Saturating(DMX_PAKET_SIZE)).0;
-                            bricklet
-                                .write_frame_low_level(WriteFrameLowLevelRequest {
-                                    frame_length: DMX_PAKET_SIZE,
-                                    frame_chunk_offset: offset,
-                                    frame_chunk_data: *channel_values
-                                        .sub_array_ref(offset as usize),
-                                })
-                                .await?;
-                        } else {
-                            let offset = lower_channel - (lower_channel % DMX_PAKET_SIZE);
-                            bricklet
-                                .write_frame_low_level(WriteFrameLowLevelRequest {
-                                    frame_length: DMX_PAKET_SIZE,
-                                    frame_chunk_offset: offset,
-                                    frame_chunk_data: *channel_values
-                                        .sub_array_ref(offset as usize),
-                                })
-                                .await?;
-                            let offset = upper_channel - (upper_channel % DMX_PAKET_SIZE);
-                            bricklet
-                                .write_frame_low_level(WriteFrameLowLevelRequest {
-                                    frame_length: DMX_PAKET_SIZE,
-                                    frame_chunk_offset: offset,
-                                    frame_chunk_data: *channel_values
-                                        .sub_array_ref(offset as usize),
-                                })
-                                .await?;
-                        }
+                let mut max_modified_channel = None;
+                if let Some(entry) = channel_values.get_mut(lower_channel as usize) {
+                    if *entry != lower_value {
+                        *entry = lower_value;
+                        max_modified_channel = Some(lower_channel);
                     }
                 };
+                if let Some(entry) = channel_values.get_mut(higher_channel as usize) {
+                    if *entry != higher_value {
+                        *entry = higher_value;
+                        max_modified_channel = Some(
+                            max_modified_channel
+                                .map(|ch| ch.max(higher_channel))
+                                .unwrap_or(higher_channel),
+                        );
+                    }
+                };
+                if let Some(max_modified_channel) = max_modified_channel {
+                    bricklet
+                        .write_frame(WriteFrameRequest {
+                            data: &channel_values[0..=max_modified_channel as usize],
+                        })
+                        .await?;
+                }
             }
             DmxCommand::Exit => break,
         }
