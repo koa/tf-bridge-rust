@@ -1,11 +1,5 @@
-use std::{
-    marker::PhantomData,
-    num::Saturating,
-    ops::{Add, Sub},
-    time::Duration,
-};
-
-use chrono::{DateTime, Local, Timelike};
+use chrono::{DateTime, Timelike, Utc};
+use chrono_tz::Tz;
 use embedded_graphics::{
     draw_target::DrawTarget,
     geometry::Point,
@@ -20,6 +14,12 @@ use log::{debug, error, info};
 use simple_layout::prelude::{
     bordered, center, expand, horizontal_layout, optional_placement, owned_text, padding, scale,
     vertical_layout, DashedLine, Layoutable, RoundedLine,
+};
+use std::{
+    marker::PhantomData,
+    num::Saturating,
+    ops::{Add, Sub},
+    time::Duration,
 };
 use thiserror::Error;
 use tinkerforge_async::{
@@ -40,7 +40,6 @@ use tokio_stream::{
 };
 use tokio_util::either::Either;
 
-use crate::terminator::LifeLineEnd;
 use crate::{
     data::{
         registry::EventRegistry,
@@ -48,7 +47,9 @@ use crate::{
         wiring::{Orientation, ScreenSettings},
     },
     devices::display::Lcd128x64BrickletDisplay,
-    icons, util,
+    icons,
+    terminator::LifeLineEnd,
+    util,
 };
 
 const TEXT_STYLE: MonoTextStyle<BinaryColor> = MonoTextStyle::new(&FONT_6X12, BinaryColor::On);
@@ -59,7 +60,7 @@ pub struct ScreenData<
     LWB: Layoutable<BinaryColor>,
     LBR: Layoutable<BinaryColor>,
 > {
-    current_time: DateTime<Local>,
+    current_time: DateTime<Tz>,
     measured_temperature: Option<f32>,
     configured_temperature: Option<AdjustableValue<f32, LT, BinaryColor>>,
     whitebalance: Option<AdjustableValue<Saturating<u16>, LWB, BinaryColor>>,
@@ -69,7 +70,7 @@ pub struct ScreenData<
 impl<LT: Layoutable<BinaryColor>, LWB: Layoutable<BinaryColor>, LBR: Layoutable<BinaryColor>>
     ScreenData<LT, LWB, LBR>
 {
-    pub fn set_current_time(&mut self, time: DateTime<Local>) {
+    pub fn set_current_time(&mut self, time: DateTime<Tz>) {
         self.current_time = time;
     }
     pub fn set_current_tempterature(&mut self, value: f32) {
@@ -95,7 +96,7 @@ impl<LT: Layoutable<BinaryColor>, LWB: Layoutable<BinaryColor>, LBR: Layoutable<
         target: &mut impl DrawTarget<Color = BinaryColor, Error = DrawError>,
     ) -> Result<(), DrawError> {
         let rectangle = target.bounding_box();
-        let clock = if self.current_time.second() % 2 == 0 {
+        let clock = if self.current_time.second().is_multiple_of(2) {
             self.current_time.format("%H:%M")
         } else {
             self.current_time.format("%H %M")
@@ -314,7 +315,7 @@ pub fn screen_data(
         None
     };
     ScreenData {
-        current_time: Local::now(),
+        current_time: Utc::now().with_timezone(&Tz::default()),
         measured_temperature: None,
         configured_temperature,
         whitebalance,
@@ -406,7 +407,7 @@ pub enum ScreenDataError {
 
 enum ScreenMessage {
     Touched(Point),
-    LocalTime(DateTime<Local>),
+    LocalTime(DateTime<Tz>),
     Closed,
     Dimm,
     SetCurrentTemperature(f32),

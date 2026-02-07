@@ -1,11 +1,11 @@
-use std::{
-    collections::HashMap, future::Future, hash::Hash, num::Saturating, ops::DerefMut, sync::Arc,
-    time::Duration,
-};
-
-use chrono::{DateTime, Local, Timelike};
+use chrono::{DateTime, Timelike, Utc};
+use chrono_tz::Tz;
 use log::error;
 use serde::{Deserialize, Serialize};
+use std::{
+    cmp::Ordering, collections::HashMap, future::Future, hash::Hash, num::Saturating,
+    ops::DerefMut, sync::Arc, time::Duration,
+};
 use tokio::{sync::mpsc::Sender, sync::Mutex, time::sleep};
 use tokio_stream::Stream;
 
@@ -15,13 +15,30 @@ pub trait TypedKey {
     type Value;
 }
 
+#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Serialize, Deserialize)]
+pub struct ClockKey {
+    pub resolution: ClockKeyResolution,
+    pub tz: Tz,
+}
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Serialize, Deserialize, Ord, PartialOrd)]
-pub enum ClockKey {
-    MinuteClock,
-    SecondClock,
+pub enum ClockKeyResolution {
+    Seconds,
+    Minutes,
 }
 impl TypedKey for ClockKey {
-    type Value = DateTime<Local>;
+    type Value = DateTime<Tz>;
+}
+impl PartialOrd for ClockKey {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+impl Ord for ClockKey {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.resolution
+            .cmp(&other.resolution)
+            .then(self.tz.name().cmp(other.tz.name()))
+    }
 }
 
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Serialize, Deserialize, Ord, PartialOrd)]
@@ -78,7 +95,7 @@ pub trait KeyAccess<K: TypedKey<Value = V>, V: Clone + Sync + Send + 'static> {
     async fn register_access<
         'a,
         'b,
-        F: Fn(&'a Register<DateTime<Local>>) -> FR + Send + 'a,
+        F: Fn(&'a Register<DateTime<Tz>>) -> FR + Send + 'a,
         R: 'b + Send,
         FR: Future<Output = R> + Send,
     >(
@@ -125,7 +142,7 @@ pub struct ValueSnapshots {
 
 struct InnerEventRegistry {
     default_values: ValueSnapshots,
-    clock_registers: HashMap<ClockKey, Register<DateTime<Local>>>,
+    clock_registers: HashMap<ClockKey, Register<DateTime<Tz>>>,
     temperature_registers: HashMap<TemperatureKey, Register<f32>>,
     light_color_registers: HashMap<LightColorKey, Register<Saturating<u16>>>,
     brightness_color: HashMap<BrightnessKey, Register<Saturating<u8>>>,
@@ -214,20 +231,21 @@ impl InnerEventRegistry {
             )
         })
     }
-    fn clock(&mut self, clock_key: ClockKey) -> &mut Register<DateTime<Local>> {
+    fn clock(&mut self, clock_key: ClockKey) -> &mut Register<DateTime<Tz>> {
         self.clock_registers
             .entry(clock_key)
             .or_insert_with_key(|clock_key| {
-                let step_size = match clock_key {
-                    ClockKey::MinuteClock => Duration::from_secs(60).as_millis() as u32,
-                    ClockKey::SecondClock => Duration::from_secs(1).as_millis() as u32,
+                let step_size = match clock_key.resolution {
+                    ClockKeyResolution::Minutes => Duration::from_secs(60).as_millis() as u32,
+                    ClockKeyResolution::Seconds => Duration::from_secs(1).as_millis() as u32,
                 };
 
-                let clock_receiver = Register::new(Local::now());
+                let clock_receiver = Register::new(Utc::now().with_timezone(&clock_key.tz));
                 let sender = clock_receiver.sender();
+                let tz = clock_key.tz;
                 tokio::spawn(async move {
                     loop {
-                        let time = Local::now();
+                        let time = Utc::now().with_timezone(&tz);
                         match sender.send(time).await {
                             Ok(()) => {}
                             Err(error) => {
@@ -257,7 +275,7 @@ impl EventRegistry {
     pub async fn take_snapshot(&self) -> ValueSnapshots {
         self.inner.lock().await.take_snapshot()
     }
-    pub async fn clock(&self, key: ClockKey) -> impl Stream<Item = DateTime<Local>> {
+    pub async fn clock(&self, key: ClockKey) -> impl Stream<Item = DateTime<Tz>> {
         self.inner
             .lock()
             .await

@@ -12,6 +12,7 @@ use std::{
 };
 
 use chrono::{DateTime, Local};
+use chrono_tz::Tz;
 use google_sheets4::{
     api::{BatchUpdateValuesRequest, CellData, SpreadsheetMethods, ValueRange},
     hyper::{client::HttpConnector, Client},
@@ -24,6 +25,7 @@ use serde::Deserialize;
 use thiserror::Error;
 use tinkerforge_async::{base58::Uid, ip_connection::Version, DeviceIdentifier};
 
+use crate::data::registry::ClockKeyResolution;
 use crate::{
     data::{
         registry::{
@@ -742,7 +744,10 @@ impl GoogleSheetWireBuilder {
                     uid,
                     ScreenSettings {
                         orientation: row.orientation,
-                        clock_key: Some(ClockKey::MinuteClock),
+                        clock_key: Some(ClockKey {
+                            resolution: ClockKeyResolution::Minutes,
+                            tz: Tz::Europe__Zurich,
+                        }),
                         current_temperature_key,
                         adjust_temperature_key,
                         light_color_key,
