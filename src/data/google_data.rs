@@ -6,8 +6,7 @@ use std::{
     io,
     net::IpAddr,
     str::FromStr,
-    time::Duration,
-    time::SystemTime,
+    time::{Duration, SystemTime},
     vec::IntoIter,
 };
 
@@ -25,12 +24,11 @@ use serde::Deserialize;
 use thiserror::Error;
 use tinkerforge_async::{base58::Uid, ip_connection::Version, DeviceIdentifier};
 
-use crate::data::registry::ClockKeyResolution;
 use crate::{
     data::{
         registry::{
-            BrightnessKey, ClockKey, DualButtonKey, LightColorKey, SingleButtonKey,
-            SwitchOutputKey, TemperatureKey,
+            BrightnessKey, ClockKey, ClockKeyResolution, DualButtonKey, LightColorKey,
+            SingleButtonKey, SwitchOutputKey, TemperatureKey,
         },
         settings::{GoogleError, GoogleSheet, CONFIG},
         state::{BrickletConnectionData, BrickletMetadata, ConnectionState, State},
@@ -639,7 +637,19 @@ impl GoogleSheetWireBuilder {
         let controllers = context.config.room_controllers();
         let mut device_ids_of_rooms = HashMap::<_, Vec<_>>::new();
 
-        for (room, controller_id, idx, orientation, touchscreen, temp_sensor, enable_heatcontrol, enable_whitebalance_control, enable_brighness_control, touchscreen_state, temperature_state) in GoogleTable::connect(
+        for (
+            room,
+            controller_id,
+            idx,
+            orientation,
+            touchscreen,
+            temp_sensor,
+            enable_heatcontrol,
+            enable_whitebalance_control,
+            enable_brighness_control,
+            touchscreen_state,
+            temperature_state,
+        ) in GoogleTable::connect(
             &context.spreadsheet_methods,
             [
                 controllers.room_id(),
@@ -653,32 +663,75 @@ impl GoogleSheetWireBuilder {
                 controllers.enable_brightness_control(),
                 controllers.touchscreen_state(),
                 controllers.temperature_state(),
-            ], [],
+            ],
+            [],
             context.config.spreadsheet_id(),
             controllers.sheet(),
             controllers.range(),
-        ).await?.filter_map(|([room, id, idx, orientation, touchscreen, temperature,
-        heat_control, whitebalance, brightness, touchscreen_state, temperature_state], _)| {
-            if let (Some(room), Some(controller_id), Some(orientation)) = (room.get_content().map(Room::from_str)
-                                                                               .and_then(Result::ok), id.get_content(), orientation.get_content().map(|v| Orientation::deserialize(serde_yaml::Value::String(v.to_string())))
-                                                                               .and_then(Result::ok)) {
-                Some((room, controller_id.to_string().into_boxed_str(), DeviceIdxCell(idx), orientation,
-                      touchscreen.get_content().map(Uid::from_str).and_then(Result::ok),
-                      temperature.get_content().map(Uid::from_str).and_then(Result::ok),
-                      heat_control.get_content().map(|v| !v.is_empty())
-                          .unwrap_or(false),
-                      whitebalance.get_content().map(|v| !v.is_empty())
-                          .unwrap_or(false),
-                      brightness.get_content().map(|v| !v.is_empty())
-                          .unwrap_or(false),
-                      touchscreen_state, temperature_state
-                ))
-            } else {
-                None
-            }
-        }) {
-            device_ids_of_rooms.entry(room).or_default().push(
-                ControllerRow {
+        )
+        .await?
+        .filter_map(
+            |(
+                [
+                    room,
+                    id,
+                    idx,
+                    orientation,
+                    touchscreen,
+                    temperature,
+                    heat_control,
+                    whitebalance,
+                    brightness,
+                    touchscreen_state,
+                    temperature_state,
+                ],
+                _,
+            )| {
+                if let (Some(room), Some(controller_id), Some(orientation)) = (
+                    room.get_content().map(Room::from_str).and_then(Result::ok),
+                    id.get_content(),
+                    orientation
+                        .get_content()
+                        .map(|v| Orientation::deserialize(serde_yaml::Value::String(v.to_string())))
+                        .and_then(Result::ok),
+                ) {
+                    Some((
+                        room,
+                        controller_id.to_string().into_boxed_str(),
+                        DeviceIdxCell(idx),
+                        orientation,
+                        touchscreen
+                            .get_content()
+                            .map(Uid::from_str)
+                            .and_then(Result::ok),
+                        temperature
+                            .get_content()
+                            .map(Uid::from_str)
+                            .and_then(Result::ok),
+                        heat_control
+                            .get_content()
+                            .map(|v| !v.is_empty())
+                            .unwrap_or(false),
+                        whitebalance
+                            .get_content()
+                            .map(|v| !v.is_empty())
+                            .unwrap_or(false),
+                        brightness
+                            .get_content()
+                            .map(|v| !v.is_empty())
+                            .unwrap_or(false),
+                        touchscreen_state,
+                        temperature_state,
+                    ))
+                } else {
+                    None
+                }
+            },
+        ) {
+            device_ids_of_rooms
+                .entry(room)
+                .or_default()
+                .push(ControllerRow {
                     id: controller_id,
                     idx,
                     orientation,
@@ -687,14 +740,22 @@ impl GoogleSheetWireBuilder {
                     enable_heatcontrol,
                     enable_whitebalance_control,
                     enable_brighness_control,
-                },
-            );
+                });
             if let Some(uid) = touchscreen {
                 update_state_new(
-                    |s| self.updates.push(s), context.state, &touchscreen_state, uid, );
+                    |s| self.updates.push(s),
+                    context.state,
+                    &touchscreen_state,
+                    uid,
+                );
             }
             if let Some(uid) = temp_sensor {
-                update_state_new(|s| self.updates.push(s), context.state, &temperature_state, uid)
+                update_state_new(
+                    |s| self.updates.push(s),
+                    context.state,
+                    &temperature_state,
+                    uid,
+                )
             }
         }
         let controller_rows = fill_device_idx(|s| self.updates.push(s), device_ids_of_rooms);
@@ -1362,7 +1423,10 @@ fn update_state_new<F: FnMut(ValueRange)>(
                     device_identifier: _,
                 }) = metadata
                 {
-                    format!("{state}, {timestamp}, {endpoint}; {connected_uid}, {position}, hw: {}, fw: {}", hardware_version, firmware_version)
+                    format!(
+                        "{state}, {timestamp}, {endpoint}; {connected_uid}, {position}, hw: {}, fw: {}",
+                        hardware_version, firmware_version
+                    )
                 } else {
                     format!("{state}, {timestamp}, {endpoint}")
                 }

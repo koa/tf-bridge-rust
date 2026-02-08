@@ -6,7 +6,8 @@ tinkerforge:
     - address: 127.0.0.1
 google-sheet:
   key_file: sa-development.json
-  spreadsheet_id: 1a2OKCYMOUxE7PfjLjPgvIAf7WY9Y6uTMiXkEKHLlDoo
+  #spreadsheet_id: 1a2OKCYMOUxE7PfjLjPgvIAf7WY9Y6uTMiXkEKHLlDoo
+  spreadsheet_id: 1LkGNFRbPk2KLScnFTmz-bTaPv--3xlLuHlh8tl50pDo
   endpoints:
     sheet: Tinkerforge Endpoints
     range: A:F

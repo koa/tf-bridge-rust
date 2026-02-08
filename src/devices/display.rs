@@ -5,11 +5,13 @@ use embedded_graphics::{
     Pixel,
 };
 use strum_macros::EnumIter;
-use tinkerforge_async::error::TinkerforgeError;
-use tinkerforge_async::lcd_128_x_64::{
-    Lcd128X64Bricklet, SetDisplayConfigurationRequest,
-    SetTouchPositionCallbackConfigurationRequest, TouchLedConfig, TouchPositionCallback,
-    WritePixelsRequest,
+use tinkerforge_async::{
+    error::TinkerforgeError,
+    lcd_128_x_64::{
+        Lcd128X64Bricklet, SetDisplayConfigurationRequest,
+        SetTouchPositionCallbackConfigurationRequest, TouchLedConfig, TouchPositionCallback,
+        WritePixelsRequest,
+    },
 };
 use tokio_stream::{Stream, StreamExt};
 
@@ -106,9 +108,10 @@ impl Lcd128x64BrickletDisplay {
                     y_end,
                     data: &self.pending_image.data
                         [y_start as usize * 128..(y_end as usize + 1) * 128],
+                    offset: 0,
                 })
                 .await?;
-            self.current_image = self.pending_image.data.clone();
+            self.current_image = self.pending_image.data;
         }
         self.bricklet.draw_buffered_frame(false).await?;
         self.bricklet

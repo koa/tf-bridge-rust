@@ -180,7 +180,8 @@ async fn dmx_loop<St: Stream<Item = DmxCommand> + Unpin>(
                     *entry = value;
                     bricklet
                         .write_frame(WriteFrameRequest {
-                            data: &channel_values[0..=channel as usize],
+                            data: &channel_values[channel as usize..=channel as usize],
+                            offset: channel,
                         })
                         .await?;
                 }
@@ -192,10 +193,12 @@ async fn dmx_loop<St: Stream<Item = DmxCommand> + Unpin>(
                 higher_value,
             } => {
                 let mut max_modified_channel = None;
+                let mut min_modified_channel = None;
                 if let Some(entry) = channel_values.get_mut(lower_channel as usize) {
                     if *entry != lower_value {
                         *entry = lower_value;
                         max_modified_channel = Some(lower_channel);
+                        min_modified_channel = Some(lower_channel);
                     }
                 };
                 if let Some(entry) = channel_values.get_mut(higher_channel as usize) {
@@ -206,12 +209,21 @@ async fn dmx_loop<St: Stream<Item = DmxCommand> + Unpin>(
                                 .map(|ch| ch.max(higher_channel))
                                 .unwrap_or(higher_channel),
                         );
+                        min_modified_channel = Some(
+                            min_modified_channel
+                                .map(|ch| ch.min(higher_channel))
+                                .unwrap_or(higher_channel),
+                        );
                     }
                 };
-                if let Some(max_modified_channel) = max_modified_channel {
+                if let (Some(max_modified_channel), Some(min_modified_channel)) =
+                    (max_modified_channel, min_modified_channel)
+                {
                     bricklet
                         .write_frame(WriteFrameRequest {
-                            data: &channel_values[0..=max_modified_channel as usize],
+                            data: &channel_values
+                                [min_modified_channel as usize..=max_modified_channel as usize],
+                            offset: min_modified_channel,
                         })
                         .await?;
                 }
