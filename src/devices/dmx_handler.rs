@@ -180,8 +180,7 @@ async fn dmx_loop<St: Stream<Item = DmxCommand> + Unpin>(
                     *entry = value;
                     bricklet
                         .write_frame(WriteFrameRequest {
-                            data: &channel_values[channel as usize..=channel as usize],
-                            offset: channel,
+                            data: &channel_values[..=channel as usize],
                         })
                         .await?;
                 }
@@ -221,9 +220,7 @@ async fn dmx_loop<St: Stream<Item = DmxCommand> + Unpin>(
                 {
                     bricklet
                         .write_frame(WriteFrameRequest {
-                            data: &channel_values
-                                [min_modified_channel as usize..=max_modified_channel as usize],
-                            offset: min_modified_channel,
+                            data: &channel_values[..=max_modified_channel as usize],
                         })
                         .await?;
                 }

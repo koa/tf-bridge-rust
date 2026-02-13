@@ -108,7 +108,6 @@ impl Lcd128x64BrickletDisplay {
                     y_end,
                     data: &self.pending_image.data
                         [y_start as usize * 128..(y_end as usize + 1) * 128],
-                    offset: 0,
                 })
                 .await?;
             self.current_image = self.pending_image.data;
