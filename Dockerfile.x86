@@ -1,4 +1,4 @@
-FROM ghcr.io/koa/rust-cross-compile:0.0.5 as rust
+FROM ghcr.io/koa/rust-cross-compile:0.0.6 as rust
 ADD . /build/
 WORKDIR /build
 #RUN rm -r /root/.rustup
