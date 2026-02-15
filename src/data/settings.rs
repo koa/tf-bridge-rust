@@ -187,9 +187,9 @@ pub enum GoogleError {
 }
 
 impl GoogleSheet {
-    pub async fn read_secret(&self) -> Result<yup_oauth2::ApplicationSecret, GoogleError> {
+    pub async fn read_secret(&self) -> Result<yup_oauth2::ServiceAccountKey, GoogleError> {
         if let Some(filename) = &self.key_file {
-            let result = yup_oauth2::read_application_secret(filename.as_ref()).await;
+            let result = yup_oauth2::read_service_account_key(filename.as_ref()).await;
             match result {
                 Ok(key) => Ok(key),
                 Err(error) => {
@@ -198,7 +198,7 @@ impl GoogleSheet {
                 }
             }
         } else if let Some(data) = &self.key_data {
-            Ok(yup_oauth2::parse_application_secret(data.as_ref())?)
+            Ok(yup_oauth2::parse_service_account_key(data.as_ref())?)
         } else {
             Err(GoogleError::ConfigContent {
                 description: "neither key_file nor key_data filled in",

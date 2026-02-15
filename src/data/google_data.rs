@@ -94,9 +94,8 @@ pub async fn read_sheet_data(state: Option<&State>) -> Result<Option<Wiring>, Go
             .build();
 
         let executor = hyper_util::rt::TokioExecutor::new();
-        let auth = yup_oauth2::InstalledFlowAuthenticator::with_client(
+        let auth = yup_oauth2::ServiceAccountAuthenticator::with_client(
             secret,
-            yup_oauth2::InstalledFlowReturnMethod::HTTPRedirect,
             yup_oauth2::client::CustomHyperClientBuilder::from(
                 hyper_util::client::legacy::Client::builder(executor).build(connector),
             ),
