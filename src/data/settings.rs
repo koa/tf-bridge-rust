@@ -2,9 +2,7 @@ use std::io;
 use std::net::{IpAddr, Ipv6Addr};
 
 use config::{Config, ConfigError, Environment, File};
-use google_sheets4::oauth2::{
-    parse_service_account_key, read_service_account_key, ServiceAccountKey,
-};
+use google_sheets4::yup_oauth2;
 use lazy_static::lazy_static;
 use log::warn;
 use serde::Deserialize;
@@ -189,9 +187,9 @@ pub enum GoogleError {
 }
 
 impl GoogleSheet {
-    pub async fn read_secret(&self) -> Result<ServiceAccountKey, GoogleError> {
+    pub async fn read_secret(&self) -> Result<yup_oauth2::ApplicationSecret, GoogleError> {
         if let Some(filename) = &self.key_file {
-            let result = read_service_account_key(filename.as_ref()).await;
+            let result = yup_oauth2::read_application_secret(filename.as_ref()).await;
             match result {
                 Ok(key) => Ok(key),
                 Err(error) => {
@@ -200,7 +198,7 @@ impl GoogleSheet {
                 }
             }
         } else if let Some(data) = &self.key_data {
-            Ok(parse_service_account_key(data.as_ref())?)
+            Ok(yup_oauth2::parse_application_secret(data.as_ref())?)
         } else {
             Err(GoogleError::ConfigContent {
                 description: "neither key_file nor key_data filled in",

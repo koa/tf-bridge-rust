@@ -28,7 +28,7 @@ simple-layout = "0.0.2"
 thiserror = "2.0"
 tokio-util = "0.7"
 futures = "0.3"
-google-sheets4 = "5.0"
+google-sheets4 = "7.0"
 ron = "0.12"
 
 [build-dependencies]

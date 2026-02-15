@@ -14,10 +14,10 @@ use chrono::{DateTime, Local};
 use chrono_tz::Tz;
 use google_sheets4::{
     api::{BatchUpdateValuesRequest, CellData, SpreadsheetMethods, ValueRange},
-    hyper::{client::HttpConnector, Client},
     hyper_rustls::{self, HttpsConnector},
-    oauth2::ServiceAccountAuthenticator,
-    Sheets,
+    hyper_util,
+    hyper_util::client::legacy::connect::HttpConnector,
+    yup_oauth2, Sheets,
 };
 use log::{debug, info};
 use serde::Deserialize;
@@ -87,18 +87,32 @@ struct ParserContext<'a> {
 pub async fn read_sheet_data(state: Option<&State>) -> Result<Option<Wiring>, GoogleDataError> {
     Ok(if let Some(config) = &CONFIG.google_sheet {
         let secret = config.read_secret().await?;
-        let auth = ServiceAccountAuthenticator::builder(secret).build().await?;
+        let connector = hyper_rustls::HttpsConnectorBuilder::new()
+            .with_native_roots()?
+            .https_only()
+            .enable_http2()
+            .build();
 
-        let connector_builder = hyper_rustls::HttpsConnectorBuilder::new();
+        let executor = hyper_util::rt::TokioExecutor::new();
+        let auth = yup_oauth2::InstalledFlowAuthenticator::with_client(
+            secret,
+            yup_oauth2::InstalledFlowReturnMethod::HTTPRedirect,
+            yup_oauth2::client::CustomHyperClientBuilder::from(
+                hyper_util::client::legacy::Client::builder(executor).build(connector),
+            ),
+        )
+        .build()
+        .await?;
 
-        let client = Client::builder().build(
-            connector_builder
-                .with_native_roots()?
-                .https_or_http()
-                .enable_http1()
-                //.enable_http2()
-                .build(),
-        );
+        let client =
+            hyper_util::client::legacy::Client::builder(hyper_util::rt::TokioExecutor::new())
+                .build(
+                    hyper_rustls::HttpsConnectorBuilder::new()
+                        .with_native_roots()?
+                        .https_or_http()
+                        .enable_http2()
+                        .build(),
+                );
 
         let hub = Sheets::new(client, auth);
 
