@@ -137,10 +137,10 @@ async fn config_update_loop(
                         }
                         StateUpdateMessage::EndpointDisconnected(ip) => {
                             info!("Endpoint {ip} disconnected");
-                            reconfig_on_next_cycle = true;
                         }
                         StateUpdateMessage::BrickletConnected { uid, .. } => {
                             info!("Bricklet {uid} connected");
+                            reconfig_on_next_cycle = false;
                         }
                         StateUpdateMessage::BrickletDisconnected { uid, .. } => {
                             info!("Bricklet {uid} disconnected");
