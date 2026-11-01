@@ -152,8 +152,12 @@ async fn run_enumeration_listener(
     while let Some(event) = stream.next().await {
         match event {
             EnumerationListenerEvent::Ping => {
-                //info!("Ping: {}", addr.0);
-                ipcon.disconnect_probe().await?;
+                // Re-enumerate instead of just probing: an error here means the
+                // connection is dead (triggers reconnect below), and a successful
+                // call makes the master brick re-announce already-known devices,
+                // which revives any bricklet handler that died from a transient
+                // I/O error even though the bricklet itself never disconnected.
+                ipcon.clone().enumerate().await?;
             }
             EnumerationListenerEvent::Packet(paket) => {
                 let uid = paket.uid;
