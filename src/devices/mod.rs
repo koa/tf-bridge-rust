@@ -106,6 +106,7 @@ enum EnumerationListenerEvent {
     Terminate,
     TerminatedClient(Uid),
     Ping,
+    Reenumerate,
 }
 
 #[derive(Error, Debug)]
@@ -143,6 +144,16 @@ async fn run_enumeration_listener(
             IntervalStream::new(interval(Duration::from_secs(10)))
                 .map(|_| EnumerationListenerEvent::Ping),
         )
+        .merge(
+            // Deliberately slow: every "Available" packet this produces is
+            // processed like a fresh device announcement (see below), which
+            // briefly toggles connected/disconnected status for every already
+            // known device. At the original 10s cadence that churn fed back
+            // into main.rs's reconfig debounce often enough to repeatedly
+            // tear down and rebuild every endpoint connection.
+            IntervalStream::new(interval(Duration::from_secs(5 * 60)))
+                .map(|_| EnumerationListenerEvent::Reenumerate),
+        )
         //.merge(ReceiverStream::new(terminated_rx).map(EnumerationListenerEvent::TerminatedClient))
         ;
     status_updater
@@ -152,11 +163,14 @@ async fn run_enumeration_listener(
     while let Some(event) = stream.next().await {
         match event {
             EnumerationListenerEvent::Ping => {
-                // Re-enumerate instead of just probing: an error here means the
-                // connection is dead (triggers reconnect below), and a successful
-                // call makes the master brick re-announce already-known devices,
-                // which revives any bricklet handler that died from a transient
-                // I/O error even though the bricklet itself never disconnected.
+                ipcon.disconnect_probe().await?;
+            }
+            EnumerationListenerEvent::Reenumerate => {
+                // Makes the master brick re-announce already-known devices,
+                // which revives any bricklet handler that died from a
+                // transient I/O error even though the bricklet itself never
+                // disconnected. An error here means the connection itself is
+                // dead, same as a failed disconnect_probe above.
                 ipcon.clone().enumerate().await?;
             }
             EnumerationListenerEvent::Packet(paket) => {
