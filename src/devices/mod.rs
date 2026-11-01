@@ -16,7 +16,7 @@ use tinkerforge_async::{
     DeviceIdentifier,
 };
 use tokio::{
-    pin,
+    pin, select,
     sync::mpsc,
     task,
     time::{interval, sleep},
@@ -471,7 +471,19 @@ fn start_enumeration_listener(
                     }
                 }
             };
-            sleep(Duration::from_secs(10)).await;
+            // A plain sleep() here would not notice a dropped testament
+            // (e.g. from activate_devices() rebuilding the wiring) while
+            // this endpoint is unreachable, leaking a retry loop that keeps
+            // hammering a dead address forever alongside whatever replaced
+            // it. Race the retry delay against termination instead.
+            let mut terminated = testament_stream.clone().send_on_terminate(());
+            select! {
+                _ = sleep(Duration::from_secs(10)) => {}
+                _ = terminated.next() => {
+                    info!("{socket_str}: Terminated while waiting to reconnect");
+                    break;
+                }
+            }
         }
         status_updater
             .send(StateUpdateMessage::EndpointDisconnected(connection.0))
