@@ -26,7 +26,13 @@ impl TestamentReceiver {
                 .wait_for(|o| o.is_some())
                 .await
                 .expect("Cannot wait for terminate");
-            sender.send(message).await.expect("Cannot send termination");
+            // The receiver can legitimately be gone already: if the whole
+            // connection died, the listener that owned this channel has
+            // already torn down and restarted by the time this device's
+            // handler finishes dying, so there is nothing left to notify.
+            if let Err(error) = sender.send(message).await {
+                info!("Cannot send termination, ignoring: {error}");
+            }
         });
     }
     pub fn send_on_terminate<R>(self, value: R) -> impl Stream<Item = R> + Unpin {
