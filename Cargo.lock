@@ -3177,8 +3177,7 @@ dependencies = [
 [[package]]
 name = "tinkerforge-async"
 version = "2.0.8"
-source = "sparse+https://kellnr.berg-turbenthal.ch/api/v1/crates/"
-checksum = "7d39ceab9b56704f67bb848cea778be0297ec0e80c55c4a3533dba9d7b07eb25"
+source = "git+https://github.com/koa/tf-rust-async-generator#b5ede8d2e93de5ece08dda5a2bae360c4bc6a1d6"
 dependencies = [
  "futures-core",
  "prettyplease",
@@ -3191,8 +3190,7 @@ dependencies = [
 [[package]]
 name = "tinkerforge-base"
 version = "0.1.4"
-source = "sparse+https://kellnr.berg-turbenthal.ch/api/v1/crates/"
-checksum = "a5a67f5aac07d7fd413265c1ee90ea67af213c7685c9642bc9c13e6633351c13"
+source = "git+https://github.com/koa/tf-rust-async-generator#b5ede8d2e93de5ece08dda5a2bae360c4bc6a1d6"
 dependencies = [
  "byteorder",
  "const-str",
@@ -3205,14 +3203,12 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tokio-stream",
- "tokio-util",
 ]
 
 [[package]]
 name = "tinkerforge-generator"
 version = "0.1.4"
-source = "sparse+https://kellnr.berg-turbenthal.ch/api/v1/crates/"
-checksum = "7b27ac324afb5d1e9f2ef5546175fae06bd418ec2713d9e09a6a229da6952f5c"
+source = "git+https://github.com/koa/tf-rust-async-generator#b5ede8d2e93de5ece08dda5a2bae360c4bc6a1d6"
 dependencies = [
  "convert_case 0.11.0",
  "prettyplease",
