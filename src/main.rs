@@ -124,8 +124,6 @@ async fn config_update_loop(
     let mut known_state = State::default();
     let mut state_received = false;
     let mut config_timer = None;
-    let mut reconfig_on_next_cycle = false;
-    let mut endpoint_connected = false;
 
     while let Some(message) = stream.next().await {
         match message {
@@ -135,7 +133,6 @@ async fn config_update_loop(
                     match update {
                         StateUpdateMessage::EndpointConnected(ip) => {
                             info!("Endpoint {ip} connected");
-                            endpoint_connected = true;
                         }
                         StateUpdateMessage::EndpointDisconnected(ip) => {
                             info!("Endpoint {ip} disconnected");
@@ -144,8 +141,12 @@ async fn config_update_loop(
                             info!("Bricklet {uid} connected");
                         }
                         StateUpdateMessage::BrickletDisconnected { uid, .. } => {
+                            // Individual bricklet handlers revive themselves
+                            // (see devices::register_device's revive path),
+                            // so a disconnect no longer needs to trigger a
+                            // config refresh, let alone rebuild every other
+                            // endpoint along with it.
                             info!("Bricklet {uid} disconnected");
-                            reconfig_on_next_cycle = true;
                         }
                     }
                     fech_next_in(main_tx.clone(), &mut config_timer, Duration::from_secs(2));
@@ -161,14 +162,7 @@ async fn config_update_loop(
                     },
                 )
                 .await?;
-                info!(
-                    "reconfig_on_next_cycle: {}, endpoint_connected: {}",
-                    reconfig_on_next_cycle, endpoint_connected
-                );
-                let reconfig = reconfig_on_next_cycle && !endpoint_connected;
-                reconfig_on_next_cycle = false;
-                endpoint_connected = false;
-                if wiring == current_wiring && !reconfig {
+                if wiring == current_wiring {
                     info!("Configuration unchanged");
                     fech_next_in(
                         main_tx.clone(),
@@ -177,7 +171,7 @@ async fn config_update_loop(
                     );
                     continue;
                 }
-                if wiring.controllers != current_wiring.controllers || reconfig {
+                if wiring.controllers != current_wiring.controllers {
                     activate_controllers(
                         &event_registry,
                         &mut running_controllers,
@@ -185,7 +179,7 @@ async fn config_update_loop(
                     )
                     .await;
                 }
-                if wiring.tinkerforge_devices != current_wiring.tinkerforge_devices || reconfig {
+                if wiring.tinkerforge_devices != current_wiring.tinkerforge_devices {
                     activate_devices(
                         tinkerforge,
                         &event_registry,
